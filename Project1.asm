@@ -1,5 +1,6 @@
 $MODMAX10 ;Defines Target Device DE10-Lite
 
+OVEN_PIN    BIT P0_0      ;Pin connected to the oven control (e.g., SSR)
 ;--------------------------------------------------------
 ;DEFINE VARIABLES IN DATA RAM
 ;--------------------------------------------------------
@@ -28,6 +29,7 @@ INITIALIZE:
 
 
 
+
 ;--MAIN PROGRAM START--;
 MAIN:
     lcall INITIALIZE
@@ -35,7 +37,11 @@ MAIN:
     ; Main program loop
 MAIN_LOOP:
     
+    setb 
 
+
+
+    ljmp MAIN_LOOP  ; Infinite loop
     ;At some point to move the ADC values do 
     ;mov A, ADC_L
     ;do something...
