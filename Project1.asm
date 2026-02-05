@@ -8,6 +8,9 @@ TIMER0_RELOAD EQU ((65536-(CLK/(12*TIMER0_RATE)))) ; The prescaler in the CV-805
 TIMER2_RATE   EQU 10000     ; 1000Hz, for a timer tick of 1ms
 TIMER2_RELOAD EQU ((65536-(CLK/(12*TIMER2_RATE))))
 
+; ********* Buttons ***********
+SELECT_BUTTON equ Px.x
+
 SOUND_OUT     equ P1.5
 UPDOWN        equ SWA.0
 INC_TENS      equ SWA.1
@@ -50,6 +53,8 @@ TEMP_HIGH_BYTE:  DS 1
 TEMP_LOW_BYTE:   DS 1 
 
 TEMP:            DS 2
+TIME:            DS 2
+POWER:           DS 2
 ;*** Variables ***
 SOAK_TEMP_set       ds 1
 SOAK_TIME_set       ds 1
@@ -255,8 +260,10 @@ Wait50ms_L1:
 
 
 ;                           1234567890123456
-soak_param_message:     db 'sTemp: xxx C    ', 0
-reflow_param_message:   db 'rTemp: xxx C    ', 0
+soak_temp_message:      db 'Soak Temp: xxx C', 0
+soak_time_message:      db 'Soak Time: xxx C', 0
+reflow_temp_message:    db 'Reflow Temp: xxs', 0
+reflow_time_message:    db 'Reflow Time: xxs', 0
 
 display_soak_params_lcd:
     
@@ -323,6 +330,22 @@ READ_TEMPERATURE:
     ret
     ;---------------------------------------------------------------------;
 
+    
+    ;---------------READ KEYPAD-------------------;
+    ;A Macro essentially works like CHECK_COL(COL#, Literal value coloumn represents)
+    ;If the column is pressed, R7 will contain the column number (1-4)
+    CHECK_COLUMN MAC
+        jb 0%, NOT_PRESSED ;if the col value is 1 then not pressed 
+        mov R7, %1 ;move the literal value into R7
+        jnb 0%, $ ;wait until released
+        setb c ;flag to indicate key pressed
+        ret
+    NOTPRESSED:
+    ENDMAC
+
+    Configure_Keypad_Pins:
+
+    
 
 ;--- MAIN PROGRAM START ---
 MAIN:
@@ -354,18 +377,20 @@ MAIN:
 MAIN_LOOP:
 
     RESET_:
-        jnb RESET_BUTTON, SOAK_TEMP
+        jb RESET_BUTTON, SOAK_TEMP
         lcall Wait50ms
-        jnb RESET_BUTTON, SOAK_TEMP
+        jb RESET_BUTTON, SOAK_TEMP
         
         mov STATE_VAR, $0
 
         ljmp MAIN
 
+        
+
     SOAK_TEMP:
-        jnb SOAK_TEMP_BUTTON, SOAK_TIME
+        jb SOAK_TEMP_BUTTON, SOAK_TIME
         lcall Wait50ms
-        jnb SOAK_TEMP_BUTTON, SOAK_TIME
+        jb SOAK_TEMP_BUTTON, SOAK_TIME
         
         mov a, soak_temp_set
 
@@ -394,13 +419,13 @@ MAIN_LOOP:
 
         lcall display_soak_params_lcd
         
-        jb SOAK_TEMP_BUTTON, $
+        jnb SOAK_TEMP_BUTTON, $
         
 
     SOAK_TIME:
-        jnb SOAK_TIME_BUTTON, REFLOW_TEMP
+        jb SOAK_TIME_BUTTON, REFLOW_TEMP
         lcall Wait50ms
-        jnb SOAK_TIME_BUTTON, REFLOW_TEMP
+        jb SOAK_TIME_BUTTON, REFLOW_TEMP
 
         mov a, soak_time_set
 
@@ -429,13 +454,13 @@ MAIN_LOOP:
     
         lcall display_soak_params_lcd    
 
-        jb SOAK_TIME_BUTTON, $
+        jnb SOAK_TIME_BUTTON, $
     
         
     REFLOW_TEMP:
-        jnb REFLOW_TEMP_BUTTON, REFLOW_TIME
+        jb REFLOW_TEMP_BUTTON, REFLOW_TIME
         lcall Wait50ms
-        jnb REFLOW_TEMP_BUTTON, REFLOW_TIME
+        jb REFLOW_TEMP_BUTTON, REFLOW_TIME
 
         mov a, reflow_temp_set
 
@@ -464,13 +489,13 @@ MAIN_LOOP:
 
         lcall display_reflow_params_lcd
         
-        jb REFLOW_TEMP_BUTTON, $
+        jnb REFLOW_TEMP_BUTTON, $
 
 
     REFLOW_TIME:
-        jnb REFLOW_TIME_BUTTON, START_STOP_BUTTON
+        jb REFLOW_TIME_BUTTON, START_STOP_BUTTON
         lcall Wait50ms
-        jnb REFLOW_TIME_BUTTON, START_STOP_BUTTON
+        jb REFLOW_TIME_BUTTON, START_STOP_BUTTON
 
         mov a, reflow_time_set
 
@@ -499,16 +524,18 @@ MAIN_LOOP:
 
         lcall display_reflow_params_lcd
         
-        jb REFLOW_TIME_BUTTON, $
+        jnb REFLOW_TIME_BUTTON, $
 
     SELECT_BUTTON:
-        jnb SELECT_BUTTON, START_STOP_BUTTON
+        jb SELECT_BUTTON, START_STOP_BUTTON
         lcall Wait50ms
-        jnb SELECT_BUTTON, START_STOP_BUTTON
+        jb SELECT_BUTTON, START_STOP_BUTTON
         
-        mov SELECT_BUTTON_FLAG, #1
+        setb SELECT_BUTTON_FLAG
 
-        jb SELECT_BUTTON
+        jnb SELECT_BUTTON, $
+
+        sjmp PARAM_FSM
 
 
     START_STOP_BUTTON:
@@ -521,12 +548,7 @@ MAIN_LOOP:
         jb START_STOP_BUTTON, $
 
 
-BUTTON_CHECK_DONE:
-
-    jb half_seconds_flag, loop_a
-    sjmp MAIN_LOOP
-
-loop_a:
+PARAM_FSM:
 
 
 ; **************************** FSM for selecting parameters *************************
@@ -542,54 +564,96 @@ loop_a:
 StateA:
     cjne a, #0, StateB
     jb SELECT_BUTTON_FLAG, StateADone
+    
+    lcall read_keypad
+    
+    Set_Cursor(1,12)
+    Display_BCD(soak_temp_set+1)
+    Display_BCD(soak_temp_set)
+
     sjmp StateA:
 StateADone:
     inc a
+    clr SELECT_BUTTON_FLAG
     sjmp StateA
 
 StateB:
     cjne a, #1, StateC
     jb SELECT_BUTTON_FLAG, StateBDone
+    
+    lcall read_keypad
+    
+    Set_Cursor(1,12)
+    Display_BCD(soak_time_set+1)
+    Display_BCD(soak_time_set)
+    
     sjmp StateB:
 StateBDone:
     inc a
+    clr SELECT_BUTTON_FLAG
     sjmp StateB
 
 StateC:
     cjne a, #2, StateC
     jb SELECT_BUTTON_FLAG, StateCDone
+
+    lcall read_keypad
+    
+    Set_Cursor(1,12)
+    Display_BCD(reflow_temp_set+1)
+    Display_BCD(reflow_temp_set)
+
     sjmp StateC:
 StateCDone:
     inc a
+    clr SELECT_BUTTON_FLAG
     sjmp StateC
 
 StateD:
     cjne a, #3, StateA
     jb SELECT_BUTTON_FLAG, StateDDone
+
+    lcall read_keypad
+    
+    Set_Cursor(1,12)
+    Display_BCD(reflow_time_set+1)
+    Display_BCD(reflow_time_set)
+
+    sjmp StateD
 StateDDone:
     mov a, #0
+    clr SELECT_BUTTON_FLAG
     sjmp StateD
 
 
+BUTTON_CHECK_DONE:
 
+    jb half_seconds_flag, loop_a
+    ljmp MAIN_LOOP
+
+loop_a:
 
 
 
 ;==================Reflow Profile FSM==================;
 ;Checklist:
 ; 1. Implement TEMP and TIME variables - TEMP is done, still waiting on TIME
-; 2. Implement FSM outputs
-; 3. Implement reset logic
+; 2. Implement FSM outputs - Added a POWER variable for completeness, not yet implemented
+; 3. Implement reset logic - DONE
 ; 4. Implement abort condition - DONE
 State0:
+    mov POWER, #0
     mov a, STATE_VAR_1
     cjne a, #0, State1
     jb START_FLAG, State0Done
     sjmp State0
 State0Done:
     inc STATE_VAR_1
+    mov POWER, #100
+    mov TIME, #0
     sjmp State0
 State1:
+    jb RESET_BUTTON, ResetToState0
     mov a, STATE_VAR_1
     cjne a, #1, State2
     mov R0, #150 ; 150 Degrees
@@ -602,20 +666,30 @@ LessThanState1:
     sjmp State1
 GreaterThanState1:
     inc STATE_VAR_1
+    mov POWER, #20
     sjmp State1
 State2:
+    jb RESET_BUTTON, ResetToState0
     mov a, STATE_VAR_1
     cjne a, #2, State3
     mov R0, #60 ; 60 seconds
     cjne TIME, R0, CheckCarryState2 ; NOTE: TIME is not yet implemented, just a placeholder
     sjmp CheckAbortCondition ; Check if Temp. is at least 50 degrees after 60 seconds have passed
 CheckAbortCondition:
-    mov R1, #50 ; 50 Degrees
+    mov R1, #50
     cjne TEMP, R1, CheckAbortCarry
-    sjmp State2
+    ; TEMP == 50, good enough to proceed
+    inc STATE_VAR_1
+    mov POWER, #100       ; Set State3 power
+    mov TIME, #0          ; Reset timer for State3
+    sjmp State3
 CheckAbortCarry:
-    jc STOPOVEN ; If TEMP hasn't reached 50 degrees, abort the oven
-    sjmp State2
+    jc STOPOVEN          
+    ; TEMP > 50, definitely good to proceed
+    inc STATE_VAR_1
+    mov POWER, #100
+    mov TIME, #0
+    sjmp State3
 CheckCarryState2:
     jc LessThanState2
     sjmp GreaterThanState2
@@ -623,13 +697,16 @@ LessThanState2:
     sjmp State2
 GreaterThanState2:
     inc STATE_VAR_1
+    mov POWER, #100
+    mov TIME, #0
     sjmp State2
 State3:
+    jb RESET_BUTTON, ResetToState0
     mov a, STATE_VAR_1
     cjne a, #3, State4
     mov R0, #220; 220 Degrees
-    cjne TEMP, R0, CheCheckCarryState3
-    sjmpState3    
+    cjne TEMP, R0, CheckCarryState3
+    sjmp State3    
 CheckCarryState3:
     jc LessThanState3
     sjmp GreaterThanState3
@@ -637,8 +714,10 @@ LessThanState3:
     sjmp State3
 GreaterThanState3:
     inc STATE_VAR_1
+    mov POWER, #20
     sjmp State3
 State4:
+    jb RESET_BUTTON, ResetToState0
     mov a, STATE_VAR_1
     cjne a, #4, State5
     mov R0, #45 ; 45 Seconds
@@ -651,8 +730,10 @@ LessThanState4:
     sjmp State4 
 GreaterThanState4:
     inc STATE_VAR_1
+    mov POWER, #0
     sjmp State4
 State5:
+    jb RESET_BUTTON, ResetToState0
     mov a, STATE_VAR_1    
     cjne a, #5, State0
     mov R0, #60 ; 60 Degrees
@@ -667,7 +748,15 @@ LessThanState5:
 GreaterThanState5:
     sjmp State5
 
+ResetToState0:
+    mov STATE_VAR_1, #0
+    mov POWER, #0
+    ljmp State0
+
 STOPOVEN:
+    jb RESET_BUTTON, RestartProcess
     sjmp STOPOVEN ; Infinite loop to stop the oven if abort condition is met
 
+RestartProcess:
+    ljmp MAIN
 END
