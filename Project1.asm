@@ -468,7 +468,7 @@ State0Done:
 State1:
     cjne a, #1, State2
     mov R0, #150 ; 150 Degrees
-    cjne R0, TEMP, CheckCarryState1 ; NOTE: TEMP is not yet implemented, just a placeholder
+    cjne TEMP, R0, CheckCarryState1 ; NOTE: TEMP is not yet implemented, just a placeholder
     sjmp State1
 CheckCarryState1:
     jc LessThanState1
@@ -481,7 +481,7 @@ GreaterThanState1:
 State2:
     cjne a, #2, State3
     mov R0, #60 ; 60 seconds
-    cjne R0, TIME, CheckCarryState2 ; NOTE: TIME is not yet implemented, just a placeholder
+    cjne TIME, R0, CheckCarryState2 ; NOTE: TIME is not yet implemented, just a placeholder
     sjmp State2
 CheckCarryState2:
     jc LessThanState2
@@ -493,8 +493,8 @@ GreaterThanState2:
     sjmp State2
 State3:
     cjne a, #3, S
- ; 220 Degrees
-    cjne R0, TEMP, CheCheckCarryState3
+    mov R0, #220; 220 Degrees
+    cjne TEMP, R0, CheCheckCarryState3
     sjmpState3    
  
 CheckCarryState3:
@@ -506,7 +506,7 @@ GreaterThanState3:
     inc a
     sjmp State3    cjne a, #4, State5
     mov R0, #45 ; 45 Seconds
-    cjne R0, TIME, CheckCarryState4
+    cjne TIME, R0, CheckCarryState4
     sjmp State4
 CheckCarryState4:
     jc LessThanState4
@@ -517,7 +517,7 @@ GreaterThanState4:
     inc a
     sjmp State4    cjne a, #5, State0
     mov R0, #60 ; 60 Degrees
-    cjne R0, TEMP, CheckCarryState5
+    cjne TEMP, R0, CheckCarryState5
     sjmp State5
 CheckCarryState5:
     jc LessThanState5
