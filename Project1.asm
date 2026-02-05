@@ -10,7 +10,9 @@ TIMER2_RELOAD EQU ((65536-(CLK/(12*TIMER2_RATE))))
 
 ; ********* Buttons ***********
 SELECT_BUTTON equ Px.x
+RESET_BUTTON  equ PX.X
 
+OVEN_PIN      equ P0.0
 SOUND_OUT     equ P1.5
 UPDOWN        equ SWA.0
 INC_TENS      equ SWA.1
@@ -56,13 +58,13 @@ TEMP:            DS 2
 TIME:            DS 2
 POWER:           DS 2
 ;*** Variables ***
-SOAK_TEMP_set       ds 1
-SOAK_TIME_set       ds 1
-reflow_temp_set     ds 1
-REFLOW_TIME_set     ds 1
+SOAK_TEMP_set       ds 2
+SOAK_TIME_set       ds 2
+reflow_temp_set     ds 2
+REFLOW_TIME_set     ds 2
 
-soak_time       ds 1
-REFLOW_TIME     ds 1
+soak_time       ds 2
+REFLOW_TIME     ds 2
 
 ; PWM variables
 Temp_measured ds 2
@@ -87,13 +89,13 @@ SECONDS_FLAG:       DBIT 1  ; can change later depending on how fast we want it
 cseg
 ; These 'equ' must match the hardware wiring
 ; None of these are implemented yet, we need to match these assignments to the wiring
-LCD_RS equ PX.X
+ELCD_RS equ P1.7
 ;LCD_RW equ PX.X ; Not used in this code, connect the pin to GND
-LCD_E equ  PX.X
-LCD_D4 equ PX.X
-LCD_D5 equ PX.X
-LCD_D6 equ PX.X
-LCD_D7 equ PX.X
+ELCD_E equ  P1.1
+ELCD_D4 equ P0.7
+ELCD_D5 equ P0.5
+ELCD_D6 equ P0.3
+ELCD_D7 equ P0.1
 
 ;Keypad pin assignments
 ROW1 EQU PX.X
@@ -111,6 +113,7 @@ $LIST
 
 $NOLIST
 $include(math32.asm)
+$include(Read_keypad.asm)
 $LIST
 
 ;-----------------------INTIALIZE SERIAL PORT FOR INPUT OUTUUT-----------------------;
@@ -166,7 +169,7 @@ Timer0_ISR:
 	;clr TF0  ; According to the data sheet this is done for us already.
 	mov TH0, #high(TIMER0_RELOAD) ; Timer 0 doesn't have autoreload in the CV-8052
 	mov TL0, #low(TIMER0_RELOAD)
-	cpl SOUND_OUT ; Connect speaker to P3.7!
+	cpl SOUND_OUT ; Connect speaker to P1.5
 	reti
 
 ;---------------------------------;
@@ -209,19 +212,22 @@ Timer2_ISR:
 Inc_Done:
 	; Check if half second has passed
 	mov a, Count1ms+0
-	cjne a, #low(500), Timer2_ISR_done ; Warning: this instruction changes the carry flag!
+	cjne a, #low(1000), Timer2_ISR_done ; Warning: this instruction changes the carry flag!
 	mov a, Count1ms+1
-	cjne a, #high(500), Timer2_ISR_done
+	cjne a, #high(1000), Timer2_ISR_done
 	
 	; 500 milliseconds have passed.  Set a flag so the main program knows
-	setb half_seconds_flag ; Let the main program know half second had passed
+	setb seconds_flag ; Let the main program know half second had passed
 	; Toggle LEDR0 so it blinks
+    inc TIME ; Increment the TIME Variable
 	cpl LEDRA.0
 	cpl TR0 ; Enable/disable timer/counter 0. This line creates a beep-silence-beep-silence sound.
 	; Reset to zero the milli-seconds counter, it is a 16-bit variable
 	clr a
 	mov Count1ms+0, a
 	mov Count1ms+1, a
+
+    
 	; Increment the BCD counter
 	mov a, BCD_counter
 	jb UPDOWN, Timer2_ISR_decrement
@@ -264,6 +270,7 @@ soak_temp_message:      db 'Soak Temp: xxx C', 0
 soak_time_message:      db 'Soak Time: xxx C', 0
 reflow_temp_message:    db 'Reflow Temp: xxs', 0
 reflow_time_message:    db 'Reflow Time: xxs', 0
+ready_message:          db 'Ready to Start! ', 0
 
 display_soak_params_lcd:
     
@@ -310,7 +317,7 @@ READ_TEMPERATURE:
 	mov x+1, ADC_H
 	mov x+0, ADC_L
     ; Convert ADC reading to temperature in Celsius
-    ; Temp (C) = (ADC_value * 5000) / 4096
+    ; Voltage = (ADC_value * 5000) / 4096
     Load_y(5000)
 	lcall mul32
 	Load_y(4096)
@@ -343,8 +350,26 @@ READ_TEMPERATURE:
     NOTPRESSED:
     ENDMAC
 
-    Configure_Keypad_Pins:
+    ;P1MOD Controls the P1.x pin modes
+    ;P2MOD Controls the P2.x pin modes
+    
+    Configure_Pins:
+        ;Honestly figure out the input and output pins later 
+        SETB P0MOD.0 ;pin to drive oven o
 
+ 
+    ;USING DUMMY VARIABLES FOR ROW/COL PINS, REPLACE LATER
+    CHECK_KEYPAD:
+        ;check row1
+        clr ROW1 ;set specific pin to 0 to check columns ROW1 = GND
+        CHECK_COLUMN(COL1, 0x01)
+        CHECK_COLUMN(COL2, 0x02)
+        CHECK_COLUMN(COL3, 0x03)
+        CHECK_COLUMN(COL4, 0x04)
+        setb ROW1
+
+        ;check row2
+        clr ROW
     
 
 ;--- MAIN PROGRAM START ---
@@ -363,7 +388,7 @@ MAIN:
     lcall ELCD_4BIT ; Intialize LCD
     lcall INITIALIZE
 
-    clr half_seconds_flag
+    clr seconds_flag
     clr START_FLAG
 
     mov soak_temp_set, #150
@@ -373,6 +398,9 @@ MAIN:
 
     mov STATE_VAR_1, #0x0000
     mov STATE_VAR_2, #0x0000
+    mov TIME, #0
+    mov TEMP, #0
+    mov POWER, #0
 
 MAIN_LOOP:
 
@@ -387,167 +415,6 @@ MAIN_LOOP:
 
         
 
-    SOAK_TEMP:
-        jb SOAK_TEMP_BUTTON, SOAK_TIME
-        lcall Wait50ms
-        jb SOAK_TEMP_BUTTON, SOAK_TIME
-        
-        mov a, soak_temp_set
-
-        jb INC_TENS, SOAK_TEMP_TENS
-        jb UPDOWN, SOAK_TEMP_DEC
-        
-        add a, #0x01
-        sjmp SOAK_TEMP_DA
-
-        SOAK_TEMP_DEC:
-            subb a, #0x01
-            sjmp SOAK_TEMP_DA
-        
-        SOAK_TEMP_TENS:
-            jb UPDOWN, SOAK_TEMP_TENS_DEC
-
-            add a, #0x10
-            sjmp SOAK_TEMP_DA
-
-        SOAK_TEMP_TENS_DEC:
-            subb a, #0x10
-
-        SOAK_TEMP_DA:
-            da a
-            mov soak_temp_set, a
-
-        lcall display_soak_params_lcd
-        
-        jnb SOAK_TEMP_BUTTON, $
-        
-
-    SOAK_TIME:
-        jb SOAK_TIME_BUTTON, REFLOW_TEMP
-        lcall Wait50ms
-        jb SOAK_TIME_BUTTON, REFLOW_TEMP
-
-        mov a, soak_time_set
-
-        jb INC_TENS, SOAK_TIME_TENS
-        jb UPDOWN, SOAK_TIME_DEC
-        
-        add a, #0x01
-        sjmp SOAK_TIME_DA
-
-        SOAK_TIME_DEC:
-            subb a, #0x01
-            sjmp SOAK_TIME_DA
-        
-        SOAK_TIME_TENS:
-            jb UPDOWN, SOAK_TIME_TENS_DEC
-
-            add a, #0x10
-            sjmp SOAK_TIME_DA
-
-        SOAK_TIME_TENS_DEC:
-            subb a, #0x10
-
-        SOAK_TIME_DA:
-            da a
-            mov soak_time_set, a
-    
-        lcall display_soak_params_lcd    
-
-        jnb SOAK_TIME_BUTTON, $
-    
-        
-    REFLOW_TEMP:
-        jb REFLOW_TEMP_BUTTON, REFLOW_TIME
-        lcall Wait50ms
-        jb REFLOW_TEMP_BUTTON, REFLOW_TIME
-
-        mov a, reflow_temp_set
-
-        jb INC_TENS, REFLOW_TEMP_TENS
-        jb UPDOWN, REFLOW_TEMP_DEC
-        
-        add a, #0x01
-        sjmp REFLOW_TEMP_DA
-
-        REFLOW_TEMP_DEC:
-            subb a, #0x01
-            sjmp REFLOW_TEMP_DA
-        
-        REFLOW_TEMP_TENS:
-            jb UPDOWN, REFLOW_TEMP_TENS_DEC
-
-            add a, #0x10
-            sjmp REFLOW_TEMP_DA
-
-        REFLOW_TEMP_TENS_DEC:
-            subb a, #0x10
-
-        REFLOW_TEMP_DA:
-            da a
-            mov reflow_temp_set, a
-
-        lcall display_reflow_params_lcd
-        
-        jnb REFLOW_TEMP_BUTTON, $
-
-
-    REFLOW_TIME:
-        jb REFLOW_TIME_BUTTON, START_STOP_BUTTON
-        lcall Wait50ms
-        jb REFLOW_TIME_BUTTON, START_STOP_BUTTON
-
-        mov a, reflow_time_set
-
-        jb INC_TENS, REFLOW_TIME_TENS
-        jb UPDOWN, REFLOW_TIME_DEC
-        
-        add a, #0x01
-        sjmp REFLOW_TIME_DA
-
-        REFLOW_TIME_DEC:
-            subb a, #0x01
-            sjmp REFLOW_TIME_DA
-        
-        REFLOW_TIME_TENS:
-            jb UPDOWN, REFLOW_TIME_TENS_DEC
-
-            add a, #0x10
-            sjmp REFLOW_TIME_DA
-
-        REFLOW_TIME_TENS_DEC:
-            subb a, #0x10
-
-        REFLOW_TIME_DA:
-            da a
-            mov reflow_time_set, a
-
-        lcall display_reflow_params_lcd
-        
-        jnb REFLOW_TIME_BUTTON, $
-
-    SELECT_BUTTON:
-        jb SELECT_BUTTON, START_STOP_BUTTON
-        lcall Wait50ms
-        jb SELECT_BUTTON, START_STOP_BUTTON
-        
-        setb SELECT_BUTTON_FLAG
-
-        jnb SELECT_BUTTON, $
-
-        sjmp PARAM_FSM
-
-
-    START_STOP_BUTTON:
-        jnb REFLOW_TIME_BUTTON, BUTTON_CHECK_DONE
-        lcall Wait50ms
-        jnb REFLOW_TIME_BUTTON, BUTTON_CHECK_DONE
-
-        cpl START_FLAG
-
-        jb START_STOP_BUTTON, $
-
-
 PARAM_FSM:
 
 
@@ -561,95 +428,117 @@ PARAM_FSM:
 
     mov a, STATE_VAR_2
 
+StateAInit:
+    Send_Constant_String (#soak_temp_message)
 StateA:
-    cjne a, #0, StateB
+    cjne a, #0, StateBInit
     jb SELECT_BUTTON_FLAG, StateADone
     
-    lcall read_keypad
+    lcall Keypad
+    jnc StateA
+
+    lcall Shift_Digits_Left
     
     Set_Cursor(1,12)
-    Display_BCD(soak_temp_set+1)
-    Display_BCD(soak_temp_set)
+    Display_BCD(bcd+1)
+    Display_BCD(bcd+0)
 
-    sjmp StateA:
+    sjmp StateA
 StateADone:
+    mov soak_temp_set+0, bcd+0
+    mov soak_temp_set+1, bcd+1
     inc a
     clr SELECT_BUTTON_FLAG
     sjmp StateA
 
+StateBInit:
+    Send_Constant_String(#soak_time_message)
 StateB:
-    cjne a, #1, StateC
+    cjne a, #1, StateCInit
     jb SELECT_BUTTON_FLAG, StateBDone
     
-    lcall read_keypad
+    lcall Keypad
+    jnc StateB
+
+    lcall Shift_Digits_Left
     
     Set_Cursor(1,12)
-    Display_BCD(soak_time_set+1)
-    Display_BCD(soak_time_set)
+    Display_BCD(bcd+1)
+    Display_BCD(bcd+0)
     
-    sjmp StateB:
+    sjmp StateB
 StateBDone:
+    mov soak_time_set+0, bcd+0
+    mov soak_time_set+1, bcd+1
     inc a
     clr SELECT_BUTTON_FLAG
     sjmp StateB
 
+StateCInit:
+    send_constant_string(#reflow_temp_message)
 StateC:
-    cjne a, #2, StateC
+    cjne a, #2, StateDInit
     jb SELECT_BUTTON_FLAG, StateCDone
 
-    lcall read_keypad
+    lcall Keypad
+    jnc StateC
+
+    lcall Shift_Digits_Left
     
     Set_Cursor(1,12)
-    Display_BCD(reflow_temp_set+1)
-    Display_BCD(reflow_temp_set)
+    Display_BCD(bcd+1)
+    Display_BCD(bcd+0)
 
-    sjmp StateC:
+    sjmp StateC
 StateCDone:
+    mov reflow_temp_set+0, bcd+0
+    mov reflow_temp_set+1, bcd+1
     inc a
     clr SELECT_BUTTON_FLAG
     sjmp StateC
 
+StateDInit
+    send_constant_string(#reflow_time_message)
 StateD:
-    cjne a, #3, StateA
+    cjne a, #3, State0
     jb SELECT_BUTTON_FLAG, StateDDone
 
-    lcall read_keypad
+    lcall Keypad 
+    jnc StateD
+
+    lcall Shift_Digits_Left
     
     Set_Cursor(1,12)
-    Display_BCD(reflow_time_set+1)
+    Display_BCD(bcd+1)
+    Display_BCD(bcd+0)
     Display_BCD(reflow_time_set)
 
-    sjmp StateD
+    sjmp St
+    mov reflow_time_set+0, bcd+0
+    mov reflow_time_set+1, bcd+1ateD
 StateDDone:
-    mov a, #0
+    inc a
     clr SELECT_BUTTON_FLAG
     sjmp StateD
-
-
-BUTTON_CHECK_DONE:
-
-    jb half_seconds_flag, loop_a
-    ljmp MAIN_LOOP
-
-loop_a:
 
 
 
 ;==================Reflow Profile FSM==================;
 ;Checklist:
-; 1. Implement TEMP and TIME variables - TEMP is done, still waiting on TIME
+; 1. Implement TEMP and TIME variables - TIME is done, still waiting on TEMP
 ; 2. Implement FSM outputs - Added a POWER variable for completeness, not yet implemented
 ; 3. Implement reset logic - DONE
 ; 4. Implement abort condition - DONE
 State0:
-    mov POWER, #0
+    SETB p0.00 ;oven off
     mov a, STATE_VAR_1
     cjne a, #0, State1
     jb START_FLAG, State0Done
     sjmp State0
 State0Done:
     inc STATE_VAR_1
-    mov POWER, #100
+    
+    mov TIME, #0
     mov TIME, #0
     sjmp State0
 State1:
@@ -672,6 +561,7 @@ State2:
     jb RESET_BUTTON, ResetToState0
     mov a, STATE_VAR_1
     cjne a, #2, State3
+    mov R0,M#60 ; 60 seconds
     mov R0, #60 ; 60 seconds
     cjne TIME, R0, CheckCarryState2 ; NOTE: TIME is not yet implemented, just a placeholder
     sjmp CheckAbortCondition ; Check if Temp. is at least 50 degrees after 60 seconds have passed
@@ -701,7 +591,7 @@ GreaterThanState2:
     mov TIME, #0
     sjmp State2
 State3:
-    jb RESET_BUTTON, ResetToState0
+    jb RESET_BUTTON, ResetToMain
     mov a, STATE_VAR_1
     cjne a, #3, State4
     mov R0, #220; 220 Degrees
@@ -717,7 +607,7 @@ GreaterThanState3:
     mov POWER, #20
     sjmp State3
 State4:
-    jb RESET_BUTTON, ResetToState0
+    jb RESET_BUTTON, ResetToMain
     mov a, STATE_VAR_1
     cjne a, #4, State5
     mov R0, #45 ; 45 Seconds
@@ -733,7 +623,7 @@ GreaterThanState4:
     mov POWER, #0
     sjmp State4
 State5:
-    jb RESET_BUTTON, ResetToState0
+    jb RESET_BUTTON, ResetToMain
     mov a, STATE_VAR_1    
     cjne a, #5, State0
     mov R0, #60 ; 60 Degrees
@@ -744,14 +634,15 @@ CheckCarryState5:
     sjmp GreaterThanState5
 LessThanState5:
     mov STATE_VAR_1, #0
+    clr START_FLAG
     sjmp State5
 GreaterThanState5:
     sjmp State5
 
-ResetToState0:
+ResetToMain:
     mov STATE_VAR_1, #0
     mov POWER, #0
-    ljmp State0
+    ljmp MAIN
 
 STOPOVEN:
     jb RESET_BUTTON, RestartProcess

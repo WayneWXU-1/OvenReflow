@@ -68,10 +68,12 @@ ENDMAC
 Shift_Digits_Left:
 	mov R0, #4 ; shift left four bits
 	; Uncomment the following four lines if you want to limit input to 10 digits
-	; mov a, bcd+4
-	; anl a, #0xf0
-	; jz Shift_Digits_Left_L0
-	; ret
+	mov a, bcd+1
+	anl a, #0xf0
+	jnz Shift_Digits_Left_exit
+	mov a, bcd+2
+	jnz Shift_Digits_Left_exit
+	
 Shift_Digits_Left_L0:
 	clr c
 	MYRLC(bcd+0)
@@ -84,6 +86,9 @@ Shift_Digits_Left_L0:
 	mov a, R7
 	orl a, bcd+0
 	mov bcd+0, a
+	ret
+
+Shift_Digits_left_exit:
 	ret
 	
 MYRRC MAC
