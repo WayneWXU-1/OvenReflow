@@ -43,11 +43,13 @@ org 0x002B
 
 ;--- DATA RAM ---
 dseg at 0x30
-STATE_VAR:       DS 1 
+STATE_VAR_1:     DS 1 
+STATE_VAR_2:     DS 1
 SECOND_COUNTER:  DS 1 
 TEMP_HIGH_BYTE:  DS 1 
 TEMP_LOW_BYTE:   DS 1 
 
+TEMP:            DS 2
 ;*** Variables ***
 SOAK_TEMP_set       ds 1
 SOAK_TIME_set       ds 1
@@ -88,19 +90,51 @@ LCD_D5 equ PX.X
 LCD_D6 equ PX.X
 LCD_D7 equ PX.X
 
+;Keypad pin assignments
+ROW1 EQU PX.X
+ROW2 EQU PX.X
+ROW3 EQU PX.x
+ROW4 EQU PX.x
+COL1 EQU PX.x
+COL2 EQU PX.x
+COL3 EQU PX.x
+COL4 EQU PX.x
+
 $NOLIST
 $include(LCD_4bit_DE10Lite_no_RW.inc) ; A library of LCD related functions and utility macros
 $LIST
 
+$NOLIST
 $include(math32.asm)
+$LIST
 
-;-INTIALIZE SERIAL PORT FOR INPUT OUTUUT--;
+;-----------------------INTIALIZE SERIAL PORT FOR INPUT OUTUUT-----------------------;
 ;--Setting baud rate to 115200 with 33.33MHz clock--;
+;-----------EXPLANATION------------
+;Crystal oscillates at 33.33Mhz, the CV-8052 has a fixed prescaler of 12 for timers
+;So the effective clock for timers is 33.33MHz/12 = 2.7775MHzl
+;SMOD is set to 1 in PCON so using 1/16th the clock for baud rate generation
+;That means the baud rate clock is 2.7775MHz/16 = 173.611kHz
+;Since we have 253 out of 256 its three clicks 
+;per bit, the baud rate is 173.611kHz/3 = 57.870kbps which is close enough to 57600bps
+;-----------------------------------
+
 InitSerialPort:
 	; Configure serial port and baud rate
-	mov TMOD, #00100001B ; TIMER 1 in mode 2 autoreload as timer and 
-    
-    
+    clr TR1 ; Disable timer 1
+    mov a, TMOD
+    anl a, 0x0f ; Clear the bits for timer 1
+    orl a, 0x20 ; Configure timer 1 as 8-bit autoreload
+    mov TMOD, a ; Set timer 1 mode
+
+    mov TH1, #T1_LOAD ; Load the timer value for the desired baud rate
+    mov TL1, #T1_LOAD ;Doesnt matter what we load in TL1 because it is in autoreload mode, but we need to load it with something to prevent it from overflowing immediately
+    ;Leave it as you found it, make SMOD = 1 for double baud rate
+    mov a, PCON ; Set SMOD to 1
+    orl a, #0x80
+    mov PCON, a
+    setb TR1 ; Enable timer 1
+    mov SCON, #01010010B ; Mode 1, 8-bit UART, enable receiver
 	ret
 
 
@@ -220,9 +254,17 @@ Wait50ms_L1:
     ret
 
 
-display_params_lcd:
+;                           1234567890123456
+soak_param_message:     db 'sTemp: xxx C    ', 0
+reflow_param_message:   db 'rTemp: xxx C    ', 0
+
+display_soak_params_lcd:
     
+    Set_Cursor(1,1)
+    Send_Constant_String(#soak_param_message)
     
+    Set_Cursor(2,1)
+    Send_Constant_String(#reflow_param_message)
 
     ret
 
@@ -249,10 +291,11 @@ Display_BCD_7_Seg:
 	mov HEX0, a
 	
 	ret
-
+;---------------Temperature reading and conversion function------------------;
 READ_TEMPERATURE:
     ; Start ADC conversion
     setb ADC_CONTR.7 ; Set ADC start bit SNAPSHOT!
+    jb ADC_CONTR,7, $ ;hold until done
     ;ADC_COTR.7 is cleared by hardware when conversion is done
     ; Load 32-bit 'x' with 12-bit adc result
 	mov x+3, #0
@@ -266,8 +309,20 @@ READ_TEMPERATURE:
 	Load_y(4096)
 	lcall div32
     ; Result is in 'x'
+
+    Load_y(1000) ; convert to microvolts
+    lcall mul32
+    Load_y(12300) ; 41 * 300
+    lcall div32
+
+    Load_y(22) ; add cold junction temperature
+    lcall add32
     ;do your displays and stuff
+    ;result is still in x
+    mov TEMP, x
     ret
+    ;---------------------------------------------------------------------;
+
 
 ;--- MAIN PROGRAM START ---
 MAIN:
@@ -292,6 +347,9 @@ MAIN:
     mov soak_time_set, #60
     mov reflow_temp_set, #220
     mov reflow_time_set, #30
+
+    mov STATE_VAR_1, #0x0000
+    mov STATE_VAR_2, #0x0000
 
 MAIN_LOOP:
 
@@ -333,10 +391,11 @@ MAIN_LOOP:
         SOAK_TEMP_DA:
             da a
             mov soak_temp_set, a
+
+        lcall display_soak_params_lcd
         
         jb SOAK_TEMP_BUTTON, $
         
-        lcall display_params_lcd
 
     SOAK_TIME:
         jnb SOAK_TIME_BUTTON, REFLOW_TEMP
@@ -368,8 +427,10 @@ MAIN_LOOP:
             da a
             mov soak_time_set, a
     
-        lcall display_params_lcd    
-        
+        lcall display_soak_params_lcd    
+
+        jb SOAK_TIME_BUTTON, $
+    
         
     REFLOW_TEMP:
         jnb REFLOW_TEMP_BUTTON, REFLOW_TIME
@@ -400,6 +461,8 @@ MAIN_LOOP:
         REFLOW_TEMP_DA:
             da a
             mov reflow_temp_set, a
+
+        lcall display_reflow_params_lcd
         
         jb REFLOW_TEMP_BUTTON, $
 
@@ -433,39 +496,101 @@ MAIN_LOOP:
         REFLOW_TIME_DA:
             da a
             mov reflow_time_set, a
+
+        lcall display_reflow_params_lcd
         
         jb REFLOW_TIME_BUTTON, $
 
-        lcall display_params_lcd
+    SELECT_BUTTON:
+        jnb SELECT_BUTTON, START_STOP_BUTTON
+        lcall Wait50ms
+        jnb SELECT_BUTTON, START_STOP_BUTTON
+        
+        mov SELECT_BUTTON_FLAG, #1
+
+        jb SELECT_BUTTON
+
 
     START_STOP_BUTTON:
         jnb REFLOW_TIME_BUTTON, BUTTON_CHECK_DONE
         lcall Wait50ms
         jnb REFLOW_TIME_BUTTON, BUTTON_CHECK_DONE
 
+        cpl START_FLAG
 
-BUTTON_CHECK_DONE
+        jb START_STOP_BUTTON, $
+
+
+BUTTON_CHECK_DONE:
 
     jb half_seconds_flag, loop_a
-    sjmp MAIN_LOOP;
-
-;==================FSM==================;
-;Checklist:
-; 1. Implement TEMP and TIME variables
-; 2. Implement FSM outputs
-; 3. Implement reset logic
-; 4. Implement abort condition
+    sjmp MAIN_LOOP
 
 loop_a:
-    mov a, STATE_VAR
+
+
+; **************************** FSM for selecting parameters *************************
+; 4 main states ->  A: select soak temp
+;                   B: select soak time
+;                   C: select reflow temp
+;                   D: select reflow time
+;
+; move to other fsm when start button turns on start flag
+
+    mov a, STATE_VAR_2
+
+StateA:
+    cjne a, #0, StateB
+    jb SELECT_BUTTON_FLAG, StateADone
+    sjmp StateA:
+StateADone:
+    inc a
+    sjmp StateA
+
+StateB:
+    cjne a, #1, StateC
+    jb SELECT_BUTTON_FLAG, StateBDone
+    sjmp StateB:
+StateBDone:
+    inc a
+    sjmp StateB
+
+StateC:
+    cjne a, #2, StateC
+    jb SELECT_BUTTON_FLAG, StateCDone
+    sjmp StateC:
+StateCDone:
+    inc a
+    sjmp StateC
+
+StateD:
+    cjne a, #3, StateA
+    jb SELECT_BUTTON_FLAG, StateDDone
+StateDDone:
+    mov a, #0
+    sjmp StateD
+
+
+
+
+
+
+;==================Reflow Profile FSM==================;
+;Checklist:
+; 1. Implement TEMP and TIME variables - TEMP is done, still waiting on TIME
+; 2. Implement FSM outputs
+; 3. Implement reset logic
+; 4. Implement abort condition - DONE
 State0:
+    mov a, STATE_VAR_1
     cjne a, #0, State1
     jb START_FLAG, State0Done
     sjmp State0
 State0Done:
-    inc a
+    inc STATE_VAR_1
     sjmp State0
 State1:
+    mov a, STATE_VAR_1
     cjne a, #1, State2
     mov R0, #150 ; 150 Degrees
     cjne TEMP, R0, CheckCarryState1 ; NOTE: TEMP is not yet implemented, just a placeholder
@@ -476,12 +601,20 @@ CheckCarryState1:
 LessThanState1:
     sjmp State1
 GreaterThanState1:
-    inc a
+    inc STATE_VAR_1
     sjmp State1
 State2:
+    mov a, STATE_VAR_1
     cjne a, #2, State3
     mov R0, #60 ; 60 seconds
     cjne TIME, R0, CheckCarryState2 ; NOTE: TIME is not yet implemented, just a placeholder
+    sjmp CheckAbortCondition ; Check if Temp. is at least 50 degrees after 60 seconds have passed
+CheckAbortCondition:
+    mov R1, #50 ; 50 Degrees
+    cjne TEMP, R1, CheckAbortCarry
+    sjmp State2
+CheckAbortCarry:
+    jc STOPOVEN ; If TEMP hasn't reached 50 degrees, abort the oven
     sjmp State2
 CheckCarryState2:
     jc LessThanState2
@@ -489,22 +622,25 @@ CheckCarryState2:
 LessThanState2:
     sjmp State2
 GreaterThanState2:
-    inc a
+    inc STATE_VAR_1
     sjmp State2
 State3:
-    cjne a, #3, S
+    mov a, STATE_VAR_1
+    cjne a, #3, State4
     mov R0, #220; 220 Degrees
     cjne TEMP, R0, CheCheckCarryState3
     sjmpState3    
- 
 CheckCarryState3:
     jc LessThanState3
     sjmp GreaterThanState3
 LessThanState3:
     sjmp State3
 GreaterThanState3:
-    inc a
-    sjmp State3    cjne a, #4, State5
+    inc STATE_VAR_1
+    sjmp State3
+State4:
+    mov a, STATE_VAR_1
+    cjne a, #4, State5
     mov R0, #45 ; 45 Seconds
     cjne TIME, R0, CheckCarryState4
     sjmp State4
@@ -514,8 +650,11 @@ CheckCarryState4:
 LessThanState4:
     sjmp State4 
 GreaterThanState4:
-    inc a
-    sjmp State4    cjne a, #5, State0
+    inc STATE_VAR_1
+    sjmp State4
+State5:
+    mov a, STATE_VAR_1    
+    cjne a, #5, State0
     mov R0, #60 ; 60 Degrees
     cjne TEMP, R0, CheckCarryState5
     sjmp State5
@@ -523,9 +662,12 @@ CheckCarryState5:
     jc LessThanState5
     sjmp GreaterThanState5
 LessThanState5:
-    mov a, #0
+    mov STATE_VAR_1, #0
     sjmp State5
 GreaterThanState5:
     sjmp State5
+
+STOPOVEN:
+    sjmp STOPOVEN ; Infinite loop to stop the oven if abort condition is met
 
 END
