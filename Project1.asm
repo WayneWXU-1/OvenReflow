@@ -5,12 +5,14 @@ $LIST
 CLK           EQU 33333333 ; Microcontroller system crystal frequency in Hz
 TIMER0_RATE   EQU 4096     ; 2048Hz squarewave (peak amplitude of CEM-1203 speaker)
 TIMER0_RELOAD EQU ((65536-(CLK/(12*TIMER0_RATE)))) ; The prescaler in the CV-8052 is always 12 unlike the N76E003 where is selectable.
-TIMER2_RATE   EQU 10000     ; 1000Hz, for a timer tick of 1ms
+TIMER2_RATE   EQU 1000     ; 1000Hz, for a timer tick of 1ms
 TIMER2_RELOAD EQU ((65536-(CLK/(12*TIMER2_RATE))))
 
 ; ********* Buttons ***********
 SELECT_BUTTON equ Px.x
 RESET_BUTTON  equ PX.X
+START_BUTTON  equ PX.X
+STOP_BUTTON   equ PX.X
 
 OVEN_PIN      equ P0.0
 SOUND_OUT     equ P1.5
@@ -207,10 +209,10 @@ Timer2_ISR:
 	inc Count1ms+0    ; Increment the low 8-bits first
 	mov a, Count1ms+0 ; If the low 8-bits overflow, then increment high 8-bits
 	jnz Inc_Done
-	inc Count1ms+1
+	inc Count1ms+1 ;increment high 8-bits if low 8-bits overflowed
 
 Inc_Done:
-	; Check if half second has passed
+	; Check if full second has passed
 	mov a, Count1ms+0
 	cjne a, #low(1000), Timer2_ISR_done ; Warning: this instruction changes the carry flag!
 	mov a, Count1ms+1
@@ -375,12 +377,7 @@ READ_TEMPERATURE:
 ;--- MAIN PROGRAM START ---
 MAIN:
     mov SP, #0x7F         ; Initialize Stack Pointer (Good practice)
-    mov P0M1, #0x00
-    mov P0M2, #0x00
-    mov P1M1, #0x00
-    mov P3M2, #0x00
-    mov P3M2, #0x00
-    mov P3M2, #0x00
+    lcall Pins_Init ; intialize pins
 
     lcall Timer0_Init
     lcall Timer2_Init
@@ -530,20 +527,20 @@ StateDDone:
 ; 3. Implement reset logic - DONE
 ; 4. Implement abort condition - DONE
 State0:
-    SETB p0.00 ;oven off
+    CLR p0.0 ;oven off
     mov a, STATE_VAR_1
     cjne a, #0, State1
     jb START_FLAG, State0Done
     sjmp State0
 State0Done:
     inc STATE_VAR_1
-    
-    mov TIME, #0
+    mov POWER, #100
     mov TIME, #0
     sjmp State0
 State1:
     jb RESET_BUTTON, ResetToState0
     mov a, STATE_VAR_1
+    SETB p0.0 ;power on 100 percent
     cjne a, #1, State2
     mov R0, #150 ; 150 Degrees
     cjne TEMP, R0, CheckCarryState1 ; NOTE: TEMP is not yet implemented, just a placeholder
@@ -592,6 +589,7 @@ GreaterThanState2:
     sjmp State2
 State3:
     jb RESET_BUTTON, ResetToMain
+    SETB p0.0 ;power on 100 percent
     mov a, STATE_VAR_1
     cjne a, #3, State4
     mov R0, #220; 220 Degrees
@@ -624,6 +622,7 @@ GreaterThanState4:
     sjmp State4
 State5:
     jb RESET_BUTTON, ResetToMain
+    CLR p0.0 ;turn oven off
     mov a, STATE_VAR_1    
     cjne a, #5, State0
     mov R0, #60 ; 60 Degrees
