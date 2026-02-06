@@ -217,8 +217,39 @@ Inc_Done:
 	cjne a, #low(1000), Timer2_ISR_done ; Warning: this instruction changes the carry flag!
 	mov a, Count1ms+1
 	cjne a, #high(1000), Timer2_ISR_done
+
+    ;---------------Temperature reading and conversion function------------------;
+    ; Start ADC conversion
+    setb ADC_CONTR.7 ; Set ADC start bit SNAPSHOT!
+    jb ADC_CONTR,7, $ ;hold until done
+    ;ADC_COTR.7 is cleared by hardware when conversion is done
+    ; Load 32-bit 'x' with 12-bit adc result
+	mov x+3, #0
+	mov x+2, #0
+	mov x+1, ADC_H
+	mov x+0, ADC_L
+    ; Convert ADC reading to temperature in Celsius
+    ; Voltage = (ADC_value * 5000) / 4096
+    Load_y(5000)
+	lcall mul32
+	Load_y(4096)
+	lcall div32
+    ; Result is in 'x'
+
+    Load_y(1000) ; convert to microvolts
+    lcall mul32
+    Load_y(12300) ; 41 * 300
+    lcall div32
+
+    Load_y(22) ; add cold junction temperature
+    lcall add32
+    ;do your displays and stuff
+    ;result is still in x
+    mov TEMP, x
+    ret
+;---------------------------------------------------------------------;
 	
-	; 500 milliseconds have passed.  Set a flag so the main program knows
+	;1 second have passed.  Set a flag so the main program knows
 	setb seconds_flag ; Let the main program know half second had passed
 	; Toggle LEDR0 so it blinks
     inc TIME ; Increment the TIME Variable
@@ -247,7 +278,12 @@ Timer2_ISR_done:
 	reti
 
 INITIALIZE:
-    mov P0MOD, #0x01      ; CRITICAL: Set P0.0 as output so OVEN_PIN works
+
+	mov P0MOD, #10101011b ; P0.0(OVEN_PIN), P0.1, P0.3, P0.5, P0.7 are outputs. 
+    mov P1MOD, #10100010b ; P1.7, P1.5, P1.1 are outputs
+    mov P2MOD, #0xff
+    mov P3MOD, #0xff
+    ; for keypad, 1.2, 1.4, 1.6, 2.0, 2.2, 2.4, 2.6, 3.0
     mov ADC_C, #0x00      ; Select ADC Channel 0
     ret                   ; Added RET so it doesn't crash after initializing
 
@@ -307,37 +343,7 @@ Display_BCD_7_Seg:
 	mov HEX0, a
 	
 	ret
-;---------------Temperature reading and conversion function------------------;
-READ_TEMPERATURE:
-    ; Start ADC conversion
-    setb ADC_CONTR.7 ; Set ADC start bit SNAPSHOT!
-    jb ADC_CONTR,7, $ ;hold until done
-    ;ADC_COTR.7 is cleared by hardware when conversion is done
-    ; Load 32-bit 'x' with 12-bit adc result
-	mov x+3, #0
-	mov x+2, #0
-	mov x+1, ADC_H
-	mov x+0, ADC_L
-    ; Convert ADC reading to temperature in Celsius
-    ; Voltage = (ADC_value * 5000) / 4096
-    Load_y(5000)
-	lcall mul32
-	Load_y(4096)
-	lcall div32
-    ; Result is in 'x'
 
-    Load_y(1000) ; convert to microvolts
-    lcall mul32
-    Load_y(12300) ; 41 * 300
-    lcall div32
-
-    Load_y(22) ; add cold junction temperature
-    lcall add32
-    ;do your displays and stuff
-    ;result is still in x
-    mov TEMP, x
-    ret
-    ;---------------------------------------------------------------------;
 
     
     ;---------------READ KEYPAD-------------------;
@@ -377,13 +383,13 @@ READ_TEMPERATURE:
 ;--- MAIN PROGRAM START ---
 MAIN:
     mov SP, #0x7F         ; Initialize Stack Pointer (Good practice)
-    lcall Pins_Init ; intialize pins
+    lcall INITIALIZE      ; intialize pins and adc, for now
 
     lcall Timer0_Init
     lcall Timer2_Init
     setB EA ; Enable global interrupts
     lcall ELCD_4BIT ; Intialize LCD
-    lcall INITIALIZE
+    
 
     clr seconds_flag
     clr START_FLAG
@@ -526,7 +532,9 @@ StateDDone:
 ; 2. Implement FSM outputs - Added a POWER variable for completeness, not yet implemented
 ; 3. Implement reset logic - DONE
 ; 4. Implement abort condition - DONE
+; 5. Implement LCD Feedback for Each State
 State0:
+    jb STOP_BUTTON, StopReflow
     CLR p0.0 ;oven off
     mov a, STATE_VAR_1
     cjne a, #0, State1
@@ -534,11 +542,12 @@ State0:
     sjmp State0
 State0Done:
     inc STATE_VAR_1
-    mov POWER, #100
+     mov POWER, #100
     mov TIME, #0
     sjmp State0
 State1:
     jb RESET_BUTTON, ResetToState0
+    jb STOP_BUTTON, StopReflow
     mov a, STATE_VAR_1
     SETB p0.0 ;power on 100 percent
     cjne a, #1, State2
@@ -556,6 +565,7 @@ GreaterThanState1:
     sjmp State1
 State2:
     jb RESET_BUTTON, ResetToState0
+    jb STOP_BUTTON, StopReflow
     mov a, STATE_VAR_1
     cjne a, #2, State3
     mov R0,M#60 ; 60 seconds
@@ -589,6 +599,7 @@ GreaterThanState2:
     sjmp State2
 State3:
     jb RESET_BUTTON, ResetToMain
+    jb STOP_BUTTON, StopReflow
     SETB p0.0 ;power on 100 percent
     mov a, STATE_VAR_1
     cjne a, #3, State4
@@ -606,6 +617,7 @@ GreaterThanState3:
     sjmp State3
 State4:
     jb RESET_BUTTON, ResetToMain
+    jb STOP_BUTTON, StopReflow
     mov a, STATE_VAR_1
     cjne a, #4, State5
     mov R0, #45 ; 45 Seconds
@@ -622,6 +634,7 @@ GreaterThanState4:
     sjmp State4
 State5:
     jb RESET_BUTTON, ResetToMain
+    jb STOP_BUTTON, StopReflow
     CLR p0.0 ;turn oven off
     mov a, STATE_VAR_1    
     cjne a, #5, State0
@@ -641,6 +654,9 @@ GreaterThanState5:
 ResetToMain:
     mov STATE_VAR_1, #0
     mov POWER, #0
+    ljmp MAIN
+
+StopReflow:
     ljmp MAIN
 
 STOPOVEN:
