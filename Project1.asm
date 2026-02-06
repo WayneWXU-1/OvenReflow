@@ -286,37 +286,8 @@ Inc_Done:
     ;---------------Temperature reading and conversion function------------------;
     ; Start ADC conversion
 
-    mov a, ADC_C 
-    orl a, #0x80 ; Set start conversion bit
-
-Temp_Conversion_Wait:
-
-    cjne a, #0x00, Temp_Conversion_Wait ; Just a dummy check to waste some time
-    ;ADC_COTR.7 is cleared by hardware when conversion is done
-    ; Load 32-bit 'x' with 12-bit adc result
-	mov x+3, #0
-	mov x+2, #0
-	mov x+1, ADC_H
-	mov x+0, ADC_L
-    ; Convert ADC reading to temperature in Celsius
-    ; Voltage = (ADC_value * 5000) / 4096
-    Load_y(5000)
-	lcall mul32
-	Load_y(4096)
-	lcall div32
-    ; Result is in 'x'
-
-    Load_y(1000) ; convert to microvolts
-    lcall mul32
-    Load_y(12300) ; 41 * 300
-    lcall div32
-
-    Load_y(22) ; add cold junction temperature
-    lcall add32
-    ;do your displays and stuff
-    ;result is still in x
-    mov TEMP+0, x+0
-    mov TEMP+1, x+1
+    
+    
 
     lcall Display_BCD_7_seg
     lcall SendSerial
@@ -449,6 +420,8 @@ Check_Select_Button_Press:
     jb SELECT_BUTTON, Not_Pressed
 
     setb SELECT_BUTTON_FLAG
+
+    jnb SELECT_BUTTON, $
 
     Not_Pressed:
 
@@ -592,7 +565,7 @@ MAIN:
     mov STATE_VAR_1, #0x0000
     mov STATE_VAR_2, #0x0000
     mov TIME, #0
-    mov TEMP, #0
+    mov TEMP, #0000
     mov POWER, #0
     mov DEGREES60, #60
     mov DEGREES150, #150
@@ -613,8 +586,6 @@ PARAM_FSM:
 ;                   D: select reflow time
 ;
 ; move to other FSM when start button turns on start flag
-
-    mov a, STATE_VAR_2
 
 StateAInit:
     Set_Cursor(1,1)
@@ -644,9 +615,8 @@ StateADone:
     sjmp StateA
 
 StateBInit:
-Set_Cursor(1,1)
+    Set_Cursor(1,1)
     Send_Constant_String(#soak_time_message)
-    clr SELECT_BUTTON_FLAG
 StateB:
     mov a, STATE_VAR_2
 
