@@ -1,0 +1,1054 @@
+                  2   $LIST
+0000              4   
+0000              5   CLK           EQU 33333333 ; Microcontroller system crystal frequency in Hz
+0000              6   TIMER0_RATE   EQU 4096     ; 2048Hz squarewave (peak amplitude of CEM-1203 speaker)
+0000              7   TIMER0_RELOAD EQU ((65536-(CLK/(12*TIMER0_RATE)))) ; The prescaler in the CV-8052 is always 12 unlike the N76E003 where is selectable.
+0000              8   TIMER2_RATE   EQU 1000     ; 1000Hz, for a timer tick of 1ms
+0000              9   TIMER2_RELOAD EQU ((65536-(CLK/(12*TIMER2_RATE))))
+0000             10   BAND          EQU 3 ;for flat states
+0000             11   LEAD          EQU 10 ;for ramp sates
+0000             12   
+0000             13   BAUD   EQU 57600
+0000             14   T1_LOAD EQU 256-(2*CLK) / (32*12*BAUD) ;Load 253 so it counts 3 counts before overflowing, which gives us a 57600 baud rate with a 33.333MHz clock
+0000             15   
+0000             16   
+0000             17   ; ********* Buttons ***********
+0000             18   SELECT_BUTTON equ KEY_1
+0000             19   RESET_BUTTON  equ KEY_0
+0000             20   START_BUTTON  equ KEY_3
+0000             21   STOP_BUTTON   equ KEY_2
+0000             22   ;EXTRA_BUTTON  equ P4_6
+0000             23   
+0000             24   OVEN_PIN      equ P0.0
+0000             25   SOUND_OUT     equ P1.5 ; Speaker attached to this pin
+0000             26   UPDOWN        equ SWA.0
+0000             27   INC_TENS      equ SWA.1
+0000             28   
+0000             29   ; Reset vector
+0000             30   org 0x0000
+0000 02064A      31       ljmp main
+0003             32   
+0003             33   ; External interrupt 0 vector (not used in this code)
+0003             34   org 0x0003
+0003 32          35            reti
+0004             36   
+0004             37   ; Timer/Counter 0 overflow interrupt vector
+000B             38   org 0x000B
+000B 020499      39            ljmp Timer0_ISR
+000E             40   
+000E             41   ; External interrupt 1 vector (not used in this code)
+0013             42   org 0x0013
+0013 32          43            reti
+0014             44   
+0014             45   ; Timer/Counter 1 overflow interrupt vector (not used in this code)
+001B             46   org 0x001B
+001B 32          47            reti
+001C             48   
+001C             49   ; Serial port receive/transmit interrupt vector (not used in this code)
+0023             50   org 0x0023 
+0023 32          51            reti
+0024             52            
+0024             53   ; Timer/Counter 2 overflow interrupt vector
+002B             54   org 0x002B
+002B 0204BB      55            ljmp Timer2_ISR
+002E             56   
+002E             57   
+002E             58   ;--- DATA RAM ---
+0030             59   dseg at 0x30
+0030             60   STATE_VAR_1:     DS 1 
+0031             61   STATE_VAR_2:     DS 1
+0032             62   SECOND_COUNTER:  DS 1 
+0033             63   TEMP_HIGH_BYTE:  DS 1 
+0034             64   TEMP_LOW_BYTE:   DS 1 
+0035             65   
+0035             66   
+0035             67   TEMP:            DS 2
+0037             68   TIME:            DS 2
+0039             69   POWER:           DS 2
+003B             70   DEGREES60:       DS 2
+003D             71   DEGREES150:      DS 2
+003F             72   DEGREES220:      DS 2
+0041             73   TARGET:           DS 2
+0043             74   ;*** Variables ***
+0043             75   SOAK_TEMP_set:       ds 2
+0045             76   SOAK_TIME_set:       ds 2
+0047             77   reflow_temp_set:     ds 2
+0049             78   REFLOW_TIME_set:     ds 2
+004B             79   
+004B             80   soak_time:       ds 2
+004D             81   REFLOW_TIME:     ds 2
+004F             82   
+004F             83   beep_count:      ds 1
+0050             84   
+0050             85   ; PWM variables
+0050             86   LOW_LIMIT:  ds 2
+0052             87   HIGH_LIMIT: ds 2
+0054             88   THRESHOLD:  ds 2
+0056             89   
+0056             90   x:               ds      4 ;used for 32 bit math for temperature conversion
+005A             91   y:               ds      4 ;used for 32 bit math for temperature conversion
+005E             92   bcd:    ds  5 ; <--- ADD THIS: math32 needs 5 bytes for BCD conversions
+0063             93   
+0063             94   ;--ISR RELATED--;
+0063             95   Count1ms:     ds 2 ; Used to determine when half second has passed
+0065             96   BCD_counter:  ds 1 ; The BCD counter incrememted in the ISR and displayed in the main loop
+0066             97   
+0066             98   
+0000             99   bseg
+0000            100   START_FLAG:         DBIT 1  ; Use DBIT for single bits in bseg
+0001            101   half_seconds_flag:  DBIT 1  ; half second flag
+0002            102   SECONDS_FLAG:       DBIT 1  ; can change later depending on how fast we want it
+0003            103   SELECT_BUTTON_FLAG: DBIT 1
+0004            104   mf:     dbit 1 ; <--- ADD THIS: math32 uses this as a status flag
+0005            105   
+002E            106   cseg
+002E            107   ; These 'equ' must match the hardware wiring
+002E            108   ; None of these are implemented yet, we need to match these assignments to the wiring
+002E            109   ELCD_RS equ P1.7
+002E            110   ;LCD_RW equ PX.X ; Not used in this code, connect the pin to GND
+002E            111   ELCD_E equ  P1.1
+002E            112   ELCD_D4 equ P0.7
+002E            113   ELCD_D5 equ P0.5
+002E            114   ELCD_D6 equ P0.3
+002E            115   ELCD_D7 equ P0.1
+002E            116   
+002E            117   ;Keypad pin assignments
+002E            118   ROW1 EQU P1.2
+002E            119   ROW2 EQU P1.4
+002E            120   ROW3 EQU P1.6
+002E            121   ROw4 EQU P2.0
+002E            122   COL1 EQU P2.2
+002E            123   COL2 EQU P2.4
+002E            124   COL3 EQU P2.6
+002E            125   COL4 EQU P3.0
+002E            126   
+002E            127   ;                           1234567890123456
+002E 536F616B   128   soak_temp_message:      db 'Soak Temp: xxx C', 0
+     2054656D
+     703A2078
+     78782043
+     00
+003F 536F616B   129   soak_time_message:      db 'Soak Time: xxx C', 0
+     2054696D
+     653A2078
+     78782043
+     00
+0050 5265666C   130   reflow_temp_message:    db 'Reflow Temp: xxs', 0
+     6F772054
+     656D703A
+     20787873
+     00
+0061 5265666C   131   reflow_time_message:    db 'Reflow Time: xxs', 0
+     6F772054
+     696D653A
+     20787873
+     00
+0072 52656164   132   ready_message:          db 'Ready to Start! ', 0
+     7920746F
+     20537461
+     72742120
+     00
+0083            133   
+                135   	$LIST
+013A            137   
+                614   $LIST
+                140   $LIST
+042C            142   
+042C            143   ;-----------------------INTIALIZE SERIAL PORT FOR INPUT OUTUUT-----------------------;
+042C            144   ;--Setting baud rate to 57600 with 33.33MHz clock--;
+042C            145   ;-----------EXPLANATION------------
+042C            146   ;Crystal oscillates at 33.33Mhz, the CV-8052 has a fixed prescaler of 12 for timers
+042C            147   ;So the effective clock for timers is 33.33MHz/12 = 2.7775MHzl
+042C            148   ;SMOD is set to 1 in PCON so using 1/16th the clock for baud rate generation
+042C            149   ;That means the baud rate clock is 2.7775MHz/16 = 173.611kHz
+042C            150   ;Since we have 253 out of 256 its three clicks 
+042C            151   ;per bit, the baud rate is 173.611kHz/3 = 57.870kbps which is close enough to 57600bps
+042C            152   ;-----------------------------------
+042C            153   
+042C            154   InitSerialPort:
+042C            155            ; Configure serial port and baud rate
+042C C28E       156       clr TR1 ; Disable timer 1
+042E E589       157       mov a, TMOD
+0430 540F       158       anl a, #0x0f ; Clear the bits for timer 1
+0432 4420       159       orl a, #0x20 ; Configure timer 1 as 8-bit autoreload
+0434 F589       160       mov TMOD, a ; Set timer 1 mode
+0436            161   
+0436 758DFD     162       mov TH1, #T1_LOAD ; Load the timer value for the desired baud rate
+0439 758BFD     163       mov TL1, #T1_LOAD ;Doesnt matter what we load in TL1 because it is in autoreload mode, but we need to load it with something to prevent it from overflowing immediately
+043C            164       ;Leave it as you found it, make SMOD = 1 for double baud rate
+043C E587       165       mov a, PCON ; Set SMOD to 1
+043E 4480       166       orl a, #0x80
+0440 F587       167       mov PCON, a
+0442 D28E       168       setb TR1 ; Enable timer 1
+0444 759852     169       mov SCON, #01010010B ; Mode 1, 8-bit UART, enable receiver
+0447 22         170            ret
+0448            171   
+0448            172   
+0448            173   ; Transfer readings data to the accumulator and serial output
+0448            174   SendSerial:
+0448 853556     175       mov x+0, TEMP+0 ; reloads the temp into x which will be converted to bcd
+044B 853657     176       mov x+1, TEMP+1
+044E 755800     177       mov x+2, #0
+0451 755900     178       mov x+3, #0
+0454 12013A     179       lcall hex2bcd ; standard math32.asm function
+0457            180   
+0457 E55F       181       mov a, bcd+1 ; stores hundreds position in accumulator
+0459 540F       182       anl a, #0x0F ; and operator to zero out first byte which is thousands( Has no value for our readings to ~250)
+045B 2430       183       add a, #0x30 ; 3 is the ascii operator code for serial print
+045D 12047E     184       lcall putchar
+0460            185   
+0460 E55E       186       mov a, bcd+0 ; first two bytes that are in bcd
+0462 C4         187       swap a  ; because bcd is packed in two bytes, we must put the upper one in the lower to print
+0463 540F       188       anl a, #0x0F
+0465 2430       189       add a, #0x30
+0467 12047E     190       lcall putchar
+046A            191   
+046A E55E       192       mov a, bcd+0 ; no swap needed given the ones place is in the first byte
+046C 540F       193       anl a, #0x0F
+046E 2430       194       add a, #0x30
+0470 12047E     195       lcall putchar
+0473            196   
+0473 740D       197       mov a, #'\r'    ; Call both return and newline to avoid terminal view errors
+0475 12047E     198       lcall putchar
+0478            199   
+0478 740A       200       mov a, #'\n'
+047A 12047E     201       lcall putchar
+047D 22         202       ret
+047E            203   
+047E            204   
+047E            205   
+047E            206   
+047E            207   ; Function to stransmit accumulator value into the serial buffer register after previous completion
+047E            208   putchar:
+047E 3099FD     209       jnb TI, putchar ; TI is the transmit interrupt, it will loop until it is high and we know the previous bit is sent
+0481            210       
+0481 C299       211       clr TI  ; Reset back to 0 to indicate we are transmitting 
+0483 F599       212       mov SBUF, a ; accumulator will have output chharacter already stored on it
+0485 22         213       ret
+0486            214   
+0486            215   
+0486            216   ; ******************************* TIMER ISRS ************************************
+0486            217   
+0486            218   Timer0_Init:
+0486 E589       219            mov a, TMOD
+0488 54F0       220            anl a, #0xf0 ; Clear the bits for timer 0
+048A 4401       221            orl a, #0x01 ; Configure timer 0 as 16-timer
+048C F589       222            mov TMOD, a
+048E 758CFD     223            mov TH0, #high(TIMER0_RELOAD)
+0491 758A5A     224            mov TL0, #low(TIMER0_RELOAD)
+0494            225            ; Enable the timer and interrupts
+0494 D2A9       226       setb ET0  ; Enable timer 0 interrupt
+0496 D28C       227       setb TR0  ; Start timer 0
+0498 22         228            ret
+0499            229   
+0499            230   ;---------------------------------;
+0499            231   ; ISR for timer 0.  Set to execute;
+0499            232   ; every 1/4096Hz to generate a    ;
+0499            233   ; 2048 Hz square wave at pin P3.7 ;
+0499            234   ;---------------------------------;
+0499            235   Timer0_ISR:
+0499            236            ;clr TF0  ; According to the data sheet this is done for us already.
+0499 758CFD     237            mov TH0, #high(TIMER0_RELOAD) ; Timer 0 doesn't have autoreload in the CV-8052
+049C 758A5A     238            mov TL0, #low(TIMER0_RELOAD)
+049F B295       239            cpl SOUND_OUT ; Connect speaker to P1.5
+04A1 32         240            reti
+04A2            241   
+04A2            242   ;---------------------------------;
+04A2            243   ; Routine to initialize the ISR   ;
+04A2            244   ; for timer 2                     ;
+04A2            245   ;---------------------------------;
+04A2            246   Timer2_Init:
+04A2 75C800     247            mov T2CON, #0 ; Stop timer/counter.  Autoreload mode.
+04A5 75CDF5     248            mov TH2, #high(TIMER2_RELOAD)
+04A8 75CC27     249            mov TL2, #low(TIMER2_RELOAD)
+04AB            250            ; Set the reload value
+04AB 75CBF5     251            mov RCAP2H, #high(TIMER2_RELOAD)
+04AE 75CA27     252            mov RCAP2L, #low(TIMER2_RELOAD)
+04B1            253            ; Init One millisecond interrupt counter.  It is a 16-bit variable made with two 8-bit parts
+04B1 E4         254            clr a
+04B2 F563       255            mov Count1ms+0, a
+04B4 F564       256            mov Count1ms+1, a
+04B6            257            ; Enable the timer and interrupts
+04B6 D2AD       258       setb ET2  ; Enable timer 2 interrupt
+04B8 D2CA       259       setb TR2  ; Enable timer 2
+04BA 22         260            ret
+04BB            261   
+04BB            262   ;---------------------------------;
+04BB            263   ; ISR for timer 2                 ;
+04BB            264   ;---------------------------------;
+04BB            265   Timer2_ISR:
+04BB C2CF       266            clr TF2  ; Timer 2 doesn't clear TF2 automatically. Do it in ISR
+04BD            267            
+04BD            268            ; The two registers used in the ISR must be saved in the stack
+04BD C0E0       269            push acc
+04BF C0D0       270            push psw
+04C1            271            
+04C1            272            ; Increment the 16-bit one mili second counter
+04C1 0563       273            inc Count1ms+0    ; Increment the low 8-bits first
+04C3 E563       274            mov a, Count1ms+0 ; If the low 8-bits overflow, then increment high 8-bits
+04C5 7002       275            jnz Inc_Done
+04C7 0564       276            inc Count1ms+1 ;increment high 8-bits if low 8-bits overflowed
+04C9            277   
+04C9            278   Inc_Done:
+04C9            279            ; Check if full second has passed
+04C9 E563       280            mov a, Count1ms+0
+04CB B4E871     281            cjne a, #low(1000), Timer2_ISR_Midpoint ; Warning: this instruction changes the carry flag!
+04CE E564       282            mov a, Count1ms+1
+04D0 B4036C     283            cjne a, #high(1000), Timer2_ISR_Midpoint
+04D3            284       
+04D3            285       ;a second has passed good to convert temperature;
+04D3            286       ;---------------Temperature reading and conversion function------------------;
+04D3            287       ; Start ADC conversion
+04D3            288   
+04D3 E5A1       289       mov a, ADC_C 
+04D5 4480       290       orl a, #0x80 ; Set start conversion bit
+04D7            291   
+04D7            292   Temp_Conversion_Wait:
+04D7            293   
+04D7 B400FD     294       cjne a, #0x00, Temp_Conversion_Wait ; Just a dummy check to waste some time
+04DA            295       ;ADC_COTR.7 is cleared by hardware when conversion is done
+04DA            296       ; Load 32-bit 'x' with 12-bit adc result
+04DA 755900     297            mov x+3, #0
+04DD 755800     298            mov x+2, #0
+04E0 85A357     299            mov x+1, ADC_H
+04E3 85A256     300            mov x+0, ADC_L
+04E6            301       ; Convert ADC reading to temperature in Celsius
+04E6            302       ; Voltage = (ADC_value * 5000) / 4096
+04E6 755A88     303            mov y+0, #low (5000 % 0x10000) 
+04E9 755B13     303            mov y+1, #high(5000 % 0x10000) 
+04EC 755C00     303            mov y+2, #low (5000 / 0x10000) 
+04EF 755D00     303            mov y+3, #high(5000 / 0x10000) 
+04F2 120298     304            lcall mul32
+04F5 755A00     305            mov y+0, #low (4096 % 0x10000) 
+04F8 755B10     305            mov y+1, #high(4096 % 0x10000) 
+04FB 755C00     305            mov y+2, #low (4096 / 0x10000) 
+04FE 755D00     305            mov y+3, #high(4096 / 0x10000) 
+0501 12038C     306            lcall div32
+0504            307       ; Result is in 'x'
+0504            308   
+0504 755AE8     309            mov y+0, #low (1000 % 0x10000) 
+0507 755B03     309            mov y+1, #high(1000 % 0x10000) 
+050A 755C00     309            mov y+2, #low (1000 / 0x10000) 
+050D 755D00     309            mov y+3, #high(1000 / 0x10000)  ; convert to microvolts
+0510 120298     310       lcall mul32
+0513 755A0C     311            mov y+0, #low (12300 % 0x10000) 
+0516 755B30     311            mov y+1, #high(12300 % 0x10000) 
+0519 755C00     311            mov y+2, #low (12300 / 0x10000) 
+051C 755D00     311            mov y+3, #high(12300 / 0x10000)  ; 41 * 300
+051F 12038C     312       lcall div32
+0522            313   
+0522 755A16     314            mov y+0, #low (22 % 0x10000) 
+0525 755B00     314            mov y+1, #high(22 % 0x10000) 
+0528 755C00     314            mov y+2, #low (22 / 0x10000) 
+052B 755D00     314            mov y+3, #high(22 / 0x10000)  ; add cold junction temperature
+052E 1201DF     315       lcall add32
+0531            316       ;do your displays and stuff
+0531            317       ;result is still in x
+0531 855635     318       mov TEMP+0, x+0
+0534 855736     319       mov TEMP+1, x+1
+0537            320   
+0537 1205AF     321       lcall Display_BCD_7_seg
+053A 120448     322       lcall SendSerial
+053D            323   
+053D 8003       324       sjmp Timer2_ISR_Bypass
+053F            325   
+053F            326   Timer2_ISR_Midpoint:
+053F 02057D     327   ljmp Timer2_ISR_done
+0542            328   Timer2_ISR_Bypass:
+0542            329   
+0542            330   ;---------------------------------------------------------------------;
+0542            331            
+0542            332            ;1 second have passed.  Set a flag so the main program knows
+0542 D202       333            setb seconds_flag ; Let the main program know one second had passed
+0544            334            ; Toggle LEDR0 so it blinks
+0544 0537       335       inc TIME ; Increment the TIME Variable
+0546 B2E8       336            cpl LEDRA.0
+0548 B28C       337            cpl TR0 ; Enable/disable timer/counter 0. This line creates a beep-silence-beep-silence sound.
+054A            338            ; Reset to zero the milli-seconds counter, it is a 16-bit variable
+054A E4         339            clr a
+054B F563       340            mov Count1ms+0, a
+054D F564       341            mov Count1ms+1, a
+054F            342       
+054F            343       ;Call PWM funcions
+054F            344   Checkforstate1:
+054F E530       345       MOV A, STATE_VAR_1
+0551 B40105     346       CJNE A, #1, NOT_STATE_1
+0554 120609     347       LCALL pwm_for_ramp
+0557 8016       348       SJMP PWM_EXIT
+0559            349   NOT_STATE_1:
+0559 B40305     350       CJNE A, #3, NOT_STATE_3
+055C 120609     351       LCALL pwm_for_ramp
+055F 800E       352       SJMP PWM_EXIT
+0561            353   NOT_STATE_3:
+0561 B40205     354       CJNE A, #2, NOT_STATE_2
+0564 1205DD     355       LCALL pwm_for_flatstates
+0567 8006       356       SJMP PWM_EXIT
+0569            357   NOT_STATE_2:
+0569 B40403     358       CJNE A, #4, PWM_EXIT     ; If not 4, do nothing and exit
+056C 1205DD     359       LCALL pwm_for_flatstates
+056F            360   PWM_EXIT:
+056F            361       
+056F            362            ; Increment the BCD counter
+056F E565       363            mov a, BCD_counter
+0571 20E804     364            jb UPDOWN, Timer2_ISR_decrement
+0574 2401       365            add a, #0x01
+0576 8002       366            sjmp Timer2_ISR_da
+0578            367   Timer2_ISR_decrement:
+0578 2499       368            add a, #0x99 ; Adding the 10-complement of -1 is like subtracting 1.
+057A            369   Timer2_ISR_da:
+057A D4         370            da a ; Decimal adjust instruction.  Check datasheet for more details!
+057B F565       371            mov BCD_counter, a
+057D            372            
+057D            373   Timer2_ISR_done:
+057D D0D0       374            pop psw
+057F D0E0       375            pop acc
+0581 32         376            reti
+0582            377   
+0582            378   INITIALIZE:
+0582            379   
+0582 759AAB     380            mov P0MOD, #10101011b ; P0.0(OVEN_PIN), P0.1, P0.3, P0.5, P0.7(LCD) are outputs. 
+0585 759BF6     381       mov P1MOD, #11110110b ; P1.7, P1.5, P1.1(LCD), 1.2, 1.4, 1.6(ROW) are outputs
+0588 759C01     382       mov P2MOD, #00000001b ; 2.0(ROW), 2.2, 2.4, 2.6(COL)
+058B 759D01     383       mov P3MOD, #00000001b ; 3.0 (COL)
+058E            384       ; for keypad, (ROWS as output-1)1.2, 1.4, 1.6, 2.0 - (COLS as input-0) 2.2, 2.4, 2.6, 3.0
+058E 75A100     385       mov ADC_C, #0x00      ; Select ADC Channel 0
+0591 22         386       ret                   ; Added RET so it doesn't crash after initializing
+0592            387   
+0592            388   ; ************************** FUNCTIONS ***********************************
+0592            389   
+0592            390   Wait50ms:
+0592            391   ;33.33MHz, 1 clk per cycle: 0.03us
+0592 781E       392            mov R0, #30
+0594            393   Wait50ms_L3:
+0594 794A       394            mov R1, #74
+0596            395   Wait50ms_L2:
+0596 7AFA       396            mov R2, #250
+0598            397   Wait50ms_L1:
+0598 DAFE       398            djnz R2, Wait50ms_L1 ;3*250*0.03us=22.5us
+059A D9FA       399       djnz R1, Wait50ms_L2 ;74*22.5us=1.665ms
+059C D8F6       400       djnz R0, Wait50ms_L3 ;1.665ms*30=50ms
+059E 22         401       ret
+059F            402   
+059F            403   
+059F            404   ; **************************** KEYPAD *******************************
+059F            405   
+059F            406   
+059F            407   
+059F            408   
+059F            409   ; Look-up table for the 7-seg displays. (Segments are turn on with zero) 
+059F            410   T_7seg:
+059F C0F9A4B0   411       DB 0xC0, 0xF9, 0xA4, 0xB0, 0x99        ; 0 TO 4
+     99
+05A4 9282F880   412       DB 0x92, 0x82, 0xF8, 0x80, 0x90        ; 4 TO 9
+     90
+05A9 8883C6A1   413       DB 0x88, 0x83, 0xC6, 0xA1, 0x86, 0x8E  ; A to F
+     868E
+05AF            414   
+05AF            415   ; Displays a BCD number in HEX1-HEX0
+05AF            416   Display_BCD_7_Seg:
+05AF            417   
+05AF C0E0       418       push acc
+05B1 C0D0       419       push psw
+05B3            420            
+05B3 90059F     421            mov dptr, #T_7seg
+05B6            422   
+05B6 E536       423       mov a, TEMP+1
+05B8 540F       424       anl a, #0FH
+05BA 93         425       movc a, @a+dptr
+05BB F593       426       mov HEX2, a
+05BD            427   
+05BD E535       428            mov a, TEMP
+05BF C4         429            swap a
+05C0 540F       430            anl a, #0FH
+05C2 93         431            movc a, @a+dptr
+05C3 F592       432            mov HEX1, a
+05C5            433            
+05C5 E535       434            mov a, TEMP
+05C7 540F       435            anl a, #0FH
+05C9 93         436            movc a, @a+dptr
+05CA F591       437            mov HEX0, a
+05CC            438   
+05CC D0D0       439       pop psw
+05CE D0E0       440       pop acc
+05D0            441            
+05D0 22         442            ret
+05D1            443   
+05D1            444   
+05D1            445   Check_Select_Button_Press:
+05D1            446   
+05D1 20F908     447       jb SELECT_BUTTON, Not_Pressed
+05D4 120592     448       lcall Wait50ms
+05D7 20F902     449       jb SELECT_BUTTON, Not_Pressed
+05DA            450   
+05DA D203       451       setb SELECT_BUTTON_FLAG
+05DC            452   
+05DC            453       Not_Pressed:
+05DC            454   
+05DC 22         455       ret
+05DD            456   
+05DD            457   
+05DD            458       
+05DD            459       ;---------------READ KEYPAD-------------------;
+05DD            460       ;A Macro essentially works like CHECK_COL(COL#, Literal value coloumn represents)
+05DD            461       ;If the column is pressed, R7 will contain the column number (1-4)
+05DD            462       
+05DD            463   
+05DD            464   ;**************************PWM**************************;
+05DD            465   pwm_for_flatstates:
+05DD            466   ; ---- LOW_LIM = max(0, T_TGT - T_BAND)
+05DD E541       467           MOV     A, TARGET          
+05DF C3         468           CLR     C                 ;clear carry
+05E0 9403       469           SUBB    A, #BAND         ; A = A - BAND
+05E2 5002       470           JNC     flat_low_ok       
+05E4 7400       471           MOV     A, #00h           
+05E6            472   flat_low_ok:
+05E6 F550       473           MOV     LOW_LIMIT, A        ; Store low limit in RAM
+05E8            474   
+05E8            475           ;compute high limit
+05E8 E541       476           MOV     A, TARGET          
+05EA 2403       477           ADD     A, #BAND         
+05EC 5002       478           JNC     flat_high_ok      
+05EE 74FF       479           MOV     A, #0FFh          
+05F0            480   flat_high_ok:
+05F0 F552       481           MOV     HIGH_LIMIT, A       
+05F2            482   
+05F2            483           ;turn oven on if curren temp is less than low limit
+05F2 E535       484           MOV     A, TEMP          ;make sure this variables is right!!!!!!!
+05F4 C3         485           CLR     C               
+05F5 9550       486           SUBB    A, LOW_LIMIT       
+05F7            487                                    
+05F7 400A       488           JC      flat_on       ;temp is less than low limit so turn power on since there is carry
+05F9            489   
+05F9            490           ;if current temp is greater than high lim turn off
+05F9 E535       491           MOV     A, TEMP
+05FB C3         492           CLR     C                 
+05FC 9552       493           SUBB    A, HIGH_LIMIT       
+05FE            494                                    
+05FE 6002       495           JZ      flat_done         ; If equal to HIGH_LIMit do nothing
+0600 5004       496           JNC     flat_off      ; If no borrow and not zero T_CUR > HIGH_LIM so turn off
+0602            497   
+0602            498   flat_done:
+0602 22         499           RET                       ; Inside band do nothing, holds prev values
+0603            500   flat_on:
+0603 D280       501           SETB p0.0      ;turn power on
+0605 22         502           RET
+0606            503   
+0606            504   flat_off:
+0606 C280       505           CLR p0.0      ;power off
+0608 22         506           RET
+0609            507   
+0609            508   
+0609            509   
+0609            510   
+0609            511   pwm_for_ramp:
+0609 E541       512   MOV     A, TARGET          
+060B C3         513           CLR     C                 
+060C 940A       514           SUBB    A, #LEAD         
+060E            515                                    
+060E 5002       516           JNC     ramp_thresh_ok    
+0610 7400       517           MOV     A, #00h           
+0612            518   ramp_thresh_ok:
+0612 F554       519           MOV     THRESHOLD, A         
+0614            520   
+0614            521           ;if less than threshold turn power on 
+0614 E535       522           MOV     A, TEMP          
+0616 C3         523           CLR     C                 
+0617 9554       524           SUBB    A, THRESHOLD         ; A = curren temp - threshold(target-lead)
+0619            525                                    
+0619 4026       526           JC      ramp_force_on     ; If below threshold force on and return
+061B            527   
+061B            528           ;when close to target use deadband
+061B            529           ; LOW_LIM = max(0, T_TGT - BAND)
+061B E541       530           MOV     A, TARGET          
+061D C3         531           CLR     C                 
+061E 9403       532           SUBB    A, #BAND          
+0620 5002       533           JNC     ramp_low_ok       
+0622 7400       534           MOV     A, #00h           
+0624            535   ramp_low_ok: 
+0624 F550       536           MOV     LOW_LIMIT, A        
+0626            537   ;compute high limit
+0626 E541       538           MOV     A, TARGET          
+0628 2403       539           ADD     A, #BAND         
+062A 5002       540           JNC     ramp_high_ok      
+062C 74FF       541           MOV     A, #0FFh          
+062E            542   ramp_high_ok:
+062E F552       543           MOV     HIGH_LIMIT, A       
+0630            544   
+0630            545           ;if current temp is less than low limit turn power on 
+0630 E535       546           MOV     A, TEMP          
+0632 C3         547           CLR     C                 
+0633 9550       548           SUBB    A, LOW_LIMIT        ;A = current temp - low limit (borrow if CUR < low limit)
+0635 400D       549           JC      ramp_set_on       ; If below low limit, turn ON
+0637            550   
+0637            551           ;else turn off
+0637 E535       552           MOV     A, TEMP          
+0639 C3         553           CLR     C                 
+063A 9552       554           SUBB    A, HIGH_LIMIT       
+063C 6002       555           JZ      ramp_done         ; If equal to HIGH_LIM, inside band do nothing
+063E 5007       556           JNC     ramp_set_off      ; If no borrow and not zero, above high limit set OFF
+0640            557   
+0640            558   ramp_done:
+0640 22         559           RET                      
+0641            560   
+0641            561   ramp_force_on:
+0641 D280       562           SETB p0.0      ;power on
+0643 22         563           RET
+0644            564   
+0644            565   ramp_set_on:
+0644 D280       566           SETB p0.0
+0646 22         567           RET
+0647            568   
+0647            569   ramp_set_off:
+0647 C280       570           CLR p0.0
+0649 22         571           RET 
+064A            572   
+064A            573   ;--- MAIN PROGRAM START ---
+064A            574   MAIN:
+064A 75817F     575       mov SP, #0x7F         ; Initialize Stack Pointer (Good practice)
+064D 120582     576       lcall INITIALIZE      ; intialize pins and adc, for now
+0650            577   
+0650 120486     578       lcall Timer0_Init
+0653 1204A2     579       lcall Timer2_Init
+0656 D2AF       580       setB EA ; Enable global interrupts
+0658 1200DF     581       lcall ELCD_4BIT ; Intialize LCD
+065B 12042C     582       lcall InitSerialPort
+065E            583       
+065E C202       584       clr seconds_flag
+0660 C200       585       clr START_FLAG
+0662            586   
+0662 754396     587       mov soak_temp_set, #150
+0665 75453C     588       mov soak_time_set, #60
+0668 7547DC     589       mov reflow_temp_set, #220
+066B 75491E     590       mov reflow_time_set, #30
+066E            591   
+066E 753000     592       mov STATE_VAR_1, #0x0000
+0671 753100     593       mov STATE_VAR_2, #0x0000
+0674 753700     594       mov TIME, #0
+0677 753500     595       mov TEMP, #0
+067A 753900     596       mov POWER, #0
+067D 753B3C     597       mov DEGREES60, #60
+0680 753D96     598       mov DEGREES150, #150
+0683 753FDC     599       mov DEGREES220, #220
+0686 754100     600       mov TARGET,       #0
+0689            601   
+0689 755E00     602       mov bcd, #0x0000
+068C            603   
+068C            604   MAIN_LOOP:
+068C            605   
+068C            606   PARAM_FSM:
+068C            607   
+068C            608   
+068C            609   ; **************************** FSM for selecting parameters *************************
+068C            610   ; 4 main states ->  A: select soak temp
+068C            611   ;                   B: select soak time
+068C            612   ;                   C: select reflow temp
+068C            613   ;                   D: select reflow time
+068C            614   ;
+068C            615   ; move to other FSM when start button turns on start flag
+068C            616   
+068C E531       617       mov a, STATE_VAR_2
+068E            618   
+068E            619   StateAInit:
+068E C0E0       620            push acc
+0690 7401       620            mov a, #1
+0692 14         620            dec a
+0693 12011F     620            lcall ?Set_Cursor_1 ; Select column and row
+0696 D0E0       620            pop acc
+0698 C083       621            push dph
+069A C082       621            push dpl
+069C C0E0       621            push acc
+069E 90002E     621            mov dptr, #soak_temp_message
+06A1 120112     621            lcall ?Send_Constant_String
+06A4 D0E0       621            pop acc
+06A6 D082       621            pop dpl
+06A8 D083       621            pop dph
+06AA            622   StateA:
+06AA E531       623       mov a, STATE_VAR_2
+06AC            624   
+06AC B40030     625       cjne a, #0, StateBInit
+06AF 1205D1     626       lcall Check_Select_Button_Press
+06B2 20031E     627       jb SELECT_BUTTON_FLAG, StateADone
+06B5            628       
+06B5            629       ;lcall Keypad
+06B5            630       ;jnc StateA
+06B5            631   
+06B5            632       ;lcall Shift_Digits_Left
+06B5            633       
+06B5 C0E0       634            push acc
+06B7 740C       634            mov a, #12
+06B9 14         634            dec a
+06BA 12011F     634            lcall ?Set_Cursor_1 ; Select column and row
+06BD D0E0       634            pop acc
+06BF C000       635            push ar0
+06C1 A85F       635            mov r0, bcd+1
+06C3 120124     635            lcall ?Display_BCD
+06C6 D000       635            pop ar0
+06C8 C000       636            push ar0
+06CA A85E       636            mov r0, bcd+0
+06CC 120124     636            lcall ?Display_BCD
+06CF D000       636            pop ar0
+06D1            637   
+06D1 80D7       638       sjmp StateA
+06D3            639   StateADone:
+06D3 855E43     640       mov soak_temp_set+0, bcd+0
+06D6 855F44     641       mov soak_temp_set+1, bcd+1
+06D9 0531       642       inc STATE_VAR_2
+06DB C203       643       clr SELECT_BUTTON_FLAG
+06DD 80CB       644       sjmp StateA
+06DF            645   
+06DF            646   StateBInit:
+06DF C0E0       647            push acc
+06E1 7401       647            mov a, #1
+06E3 14         647            dec a
+06E4 12011F     647            lcall ?Set_Cursor_1 ; Select column and row
+06E7 D0E0       647            pop acc
+06E9 C083       648            push dph
+06EB C082       648            push dpl
+06ED C0E0       648            push acc
+06EF 90003F     648            mov dptr, #soak_time_message
+06F2 120112     648            lcall ?Send_Constant_String
+06F5 D0E0       648            pop acc
+06F7 D082       648            pop dpl
+06F9 D083       648            pop dph
+06FB C203       649       clr SELECT_BUTTON_FLAG
+06FD            650   StateB:
+06FD E531       651       mov a, STATE_VAR_2
+06FF            652   
+06FF B40130     653       cjne a, #1, StateCInit
+0702 1205D1     654       lcall Check_Select_Button_Press
+0705 20031E     655       jb SELECT_BUTTON_FLAG, StateBDone
+0708            656       
+0708            657       ;lcall Keypad
+0708            658       ;jnc StateB
+0708            659   
+0708            660       ;lcall Shift_Digits_Left
+0708            661       
+0708 C0E0       662            push acc
+070A 740C       662            mov a, #12
+070C 14         662            dec a
+070D 12011F     662            lcall ?Set_Cursor_1 ; Select column and row
+0710 D0E0       662            pop acc
+0712 C000       663            push ar0
+0714 A85F       663            mov r0, bcd+1
+0716 120124     663            lcall ?Display_BCD
+0719 D000       663            pop ar0
+071B C000       664            push ar0
+071D A85E       664            mov r0, bcd+0
+071F 120124     664            lcall ?Display_BCD
+0722 D000       664            pop ar0
+0724            665       
+0724 80D7       666       sjmp StateB
+0726            667   StateBDone:
+0726 855E45     668       mov soak_time_set+0, bcd+0
+0729 855F46     669       mov soak_time_set+1, bcd+1
+072C 0531       670       inc STATE_VAR_2
+072E C203       671       clr SELECT_BUTTON_FLAG
+0730 80CB       672       sjmp StateB
+0732            673   
+0732            674   StateCInit:
+0732 C0E0       675            push acc
+0734 7401       675            mov a, #1
+0736 14         675            dec a
+0737 12011F     675            lcall ?Set_Cursor_1 ; Select column and row
+073A D0E0       675            pop acc
+073C C083       676            push dph
+073E C082       676            push dpl
+0740 C0E0       676            push acc
+0742 900050     676            mov dptr, #reflow_temp_message
+0745 120112     676            lcall ?Send_Constant_String
+0748 D0E0       676            pop acc
+074A D082       676            pop dpl
+074C D083       676            pop dph
+074E            677   StateC:
+074E E531       678       mov a, STATE_VAR_2
+0750            679   
+0750 B40230     680       cjne a, #2, StateDInit
+0753 1205D1     681       lcall Check_Select_Button_Press
+0756 20031E     682       jb SELECT_BUTTON_FLAG, StateCDone
+0759            683   
+0759            684       ;lcall Keypad
+0759            685       ;jnc StateC
+0759            686   
+0759            687       ;lcall Shift_Digits_Left
+0759            688       
+0759 C0E0       689            push acc
+075B 740E       689            mov a, #14
+075D 14         689            dec a
+075E 12011F     689            lcall ?Set_Cursor_1 ; Select column and row
+0761 D0E0       689            pop acc
+0763 C000       690            push ar0
+0765 A85F       690            mov r0, bcd+1
+0767 120124     690            lcall ?Display_BCD
+076A D000       690            pop ar0
+076C C000       691            push ar0
+076E A85E       691            mov r0, bcd+0
+0770 120124     691            lcall ?Display_BCD
+0773 D000       691            pop ar0
+0775            692   
+0775 80D7       693       sjmp StateC
+0777            694   StateCDone:
+0777 855E47     695       mov reflow_temp_set+0, bcd+0
+077A 855F48     696       mov reflow_temp_set+1, bcd+1
+077D 0531       697       inc STATE_VAR_2
+077F C203       698       clr SELECT_BUTTON_FLAG
+0781 80CB       699       sjmp StateC
+0783            700   
+0783            701   StateDInit:
+0783 C0E0       702            push acc
+0785 7401       702            mov a, #1
+0787 14         702            dec a
+0788 12011F     702            lcall ?Set_Cursor_1 ; Select column and row
+078B D0E0       702            pop acc
+078D C083       703            push dph
+078F C082       703            push dpl
+0791 C0E0       703            push acc
+0793 900061     703            mov dptr, #reflow_time_message
+0796 120112     703            lcall ?Send_Constant_String
+0799 D0E0       703            pop acc
+079B D082       703            pop dpl
+079D D083       703            pop dph
+079F            704   StateD:
+079F E531       705       mov a, STATE_VAR_2
+07A1            706   
+07A1 B40339     707       cjne a, #3, ReadyStateInit
+07A4 1205D1     708       lcall Check_Select_Button_Press
+07A7 200327     709       jb SELECT_BUTTON_FLAG, StateDDone
+07AA            710   
+07AA            711       ;lcall Keypad 
+07AA            712       ;jnc StateD
+07AA            713   
+07AA            714       ;lcall Shift_Digits_Left
+07AA            715       
+07AA C0E0       716            push acc
+07AC 740E       716            mov a, #14
+07AE 14         716            dec a
+07AF 12011F     716            lcall ?Set_Cursor_1 ; Select column and row
+07B2 D0E0       716            pop acc
+07B4 C000       717            push ar0
+07B6 A85F       717            mov r0, bcd+1
+07B8 120124     717            lcall ?Display_BCD
+07BB D000       717            pop ar0
+07BD C000       718            push ar0
+07BF A85E       718            mov r0, bcd+0
+07C1 120124     718            lcall ?Display_BCD
+07C4 D000       718            pop ar0
+07C6 C000       719            push ar0
+07C8 A849       719            mov r0, reflow_time_set
+07CA 120124     719            lcall ?Display_BCD
+07CD D000       719            pop ar0
+07CF            720   
+07CF 80CE       721       sjmp StateD
+07D1            722   
+07D1            723   StateDDone:
+07D1 855E49     724       mov reflow_time_set+0, bcd+0
+07D4 855F4A     725       mov reflow_time_set+1, bcd+1
+07D7 0531       726       inc STATE_VAR_2
+07D9 C203       727       clr SELECT_BUTTON_FLAG
+07DB 80C2       728       sjmp StateD
+07DD            729   
+07DD            730   ReadyStateInit:
+07DD C0E0       731            push acc
+07DF 7401       731            mov a, #1
+07E1 14         731            dec a
+07E2 12011F     731            lcall ?Set_Cursor_1 ; Select column and row
+07E5 D0E0       731            pop acc
+07E7 C083       732            push dph
+07E9 C082       732            push dpl
+07EB C0E0       732            push acc
+07ED 900072     732            mov dptr, #ready_message
+07F0 120112     732            lcall ?Send_Constant_String
+07F3 D0E0       732            pop acc
+07F5 D082       732            pop dpl
+07F7 D083       732            pop dph
+07F9            733       
+07F9            734   ReadyState:
+07F9            735       ;jnb seconds_flag, skipSerial_0 *** not too sure what this does
+07F9            736   
+07F9            737   skipSerial_0:
+07F9 20FBFD     738       jb START_BUTTON, ReadyState
+07FC 120592     739       lcall wait50ms
+07FF 20FBF7     740       jb START_BUTTON, ReadyState
+0802            741   
+0802 D200       742       setb START_FLAG
+0804 8000       743       sjmp State0
+0806            744   
+0806            745   
+0806            746   ;==================Reflow Profile FSM==================;
+0806            747   ;Checklist:
+0806            748   ; 1. Implement TEMP and TIME variables - DONE
+0806            749   ; 2. Implement FSM outputs - DONE
+0806            750   ; 3. Implement reset logic - DONE
+0806            751   ; 4. Implement abort condition - DONE
+0806            752   ; 5. Implement LCD Feedback for Each State - Not Complete
+0806            753   ; 6. Speaker beeps for state transitions - Not Complete
+0806            754   State0:
+0806 20FA0C     755       jb STOP_BUTTON, State0_StopReflow
+0809 C280       756       CLR p0.0 ;oven off
+080B E530       757       mov a, STATE_VAR_1
+080D B40012     758       cjne a, #0, State1
+0810 200005     759       jb START_FLAG, State0Done
+0813 80F1       760       sjmp State0
+0815            761   
+0815            762   State0_StopReflow:
+0815 020913     763   ljmp StopReflow
+0818            764   
+0818            765   State0Done:
+0818 0530       766       inc STATE_VAR_1
+081A 753964     767       mov POWER, #100
+081D 753700     768       mov TIME, #0
+0820 80E4       769       sjmp State0
+0822            770   State1:
+0822 20F814     771       jb RESET_BUTTON, State1_ResetToMain
+0825 20FA14     772       jb STOP_BUTTON, State1_StopReflow
+0828 E530       773       mov a, STATE_VAR_1
+082A B4011F     774       cjne a, #1, State2
+082D 853D41     775       mov TARGET, DEGREES150
+0830 AA35       776       mov R2, TEMP
+0832 E541       777       mov a, TARGET
+0834 B40208     778       cjne a, #0x02, CheckCarryState1
+0837 80E9       779       sjmp State1
+0839            780   
+0839            781   State1_ResetToMain:
+0839 02090A     782   ljmp ResetToMain
+083C            783   
+083C            784   State1_StopReflow:
+083C 020913     785   ljmp StopReflow
+083F            786   
+083F            787   CheckCarryState1:
+083F 4004       788       jc GreaterThanState1
+0841 8000       789       sjmp LessThanState1
+0843            790   LessThanState1:
+0843 80DD       791       sjmp State1
+0845            792   GreaterThanState1:
+0845 0530       793       inc STATE_VAR_1
+0847 753914     794       mov POWER, #20
+084A 80D6       795       sjmp State1
+084C            796   State2:
+084C 20F811     797       jb RESET_BUTTON, State2_ResetToMain
+084F 20FA11     798       jb STOP_BUTTON, State2_StopReflow
+0852 E530       799       mov a, STATE_VAR_1
+0854 B4023F     800       cjne a, #2, State3
+0857 783C       801       mov R0, #60 ; 60 seconds
+0859 E537       802       mov a, TIME
+085B B40028     803       cjne a, #0x00, CheckCarryState2 
+085E 8009       804       sjmp CheckAbortCondition ; Check if Temp. is at least 50 degrees after 60 seconds have passed
+0860            805   
+0860            806   State2_ResetToMain:
+0860 02090A     807   ljmp ResetToMain
+0863            808   
+0863            809   State2_StopReflow:
+0863 020913     810   ljmp StopReflow
+0866            811   
+0866            812   State2_StopOven:
+0866 020916     813   ljmp STOPOVEN
+0869            814   
+0869            815   CheckAbortCondition:
+0869 7932       816       mov R1, #50
+086B E535       817       mov a, TEMP
+086D B4010A     818       cjne a, #0x01, CheckAbortCarry
+0870            819       ; TEMP == 50, good enough to proceed
+0870 0530       820       inc STATE_VAR_1
+0872 753964     821       mov POWER, #100       ; Set State3 power
+0875 753700     822       mov TIME, #0          ; Reset timer for State3
+0878 801C       823       sjmp State3
+087A            824   CheckAbortCarry:
+087A 40EA       825       jc State2_StopOven          
+087C            826       ; TEMP > 50, definitely good to proceed
+087C 0530       827       inc STATE_VAR_1
+087E 753964     828       mov POWER, #100
+0881 753700     829       mov TIME, #0
+0884 8010       830       sjmp State3
+0886            831   CheckCarryState2:
+0886 4002       832       jc LessThanState2
+0888 8002       833       sjmp GreaterThanState2
+088A            834   LessThanState2:
+088A 80C0       835       sjmp State2
+088C            836   GreaterThanState2:
+088C 0530       837       inc STATE_VAR_1
+088E 753964     838       mov POWER, #100
+0891 753700     839       mov TIME, #0
+0894 80B6       840       sjmp State2
+0896            841   State3:
+0896 20F814     842       jb RESET_BUTTON, State3_ResetToMain
+0899 20FA14     843       jb STOP_BUTTON, State3_StopReflow
+089C E530       844       mov a, STATE_VAR_1
+089E B4031F     845       cjne a, #3, State4
+08A1 853F41     846       mov TARGET, DEGREES220
+08A4 AA35       847       mov R2, TEMP
+08A6 E541       848       mov a, TARGET
+08A8 B40208     849       cjne a, #0x02, CheckCarryState3
+08AB 80E9       850       sjmp State3    
+08AD            851   
+08AD            852   State3_ResetToMain:
+08AD 02090A     853   ljmp ResetToMain
+08B0            854   
+08B0            855   State3_StopReflow:
+08B0 020913     856   ljmp StopReflow
+08B3            857   
+08B3            858   CheckCarryState3:
+08B3 4004       859       jc GreaterThanState3
+08B5 8000       860       sjmp LessThanState3
+08B7            861   LessThanState3:
+08B7 80DD       862       sjmp State3
+08B9            863   GreaterThanState3:
+08B9 0530       864       inc STATE_VAR_1
+08BB 753914     865       mov POWER, #20
+08BE 80D6       866       sjmp State3
+08C0            867   State4:
+08C0 20F847     868       jb RESET_BUTTON, ResetToMain
+08C3 20FA4D     869       jb STOP_BUTTON, StopReflow
+08C6 E530       870       mov a, STATE_VAR_1
+08C8 B40416     871       cjne a, #4, State5
+08CB 782D       872       mov R0, #45 ; 45 Seconds
+08CD E537       873       mov a, TIME
+08CF B40002     874       cjne a, #0x00, CheckCarryState4
+08D2 80EC       875       sjmp State4
+08D4            876   CheckCarryState4:
+08D4 4002       877       jc LessThanState4
+08D6 8002       878       sjmp GreaterThanState4
+08D8            879   LessThanState4:
+08D8 80E6       880       sjmp State4 
+08DA            881   GreaterThanState4:
+08DA 0530       882       inc STATE_VAR_1
+08DC 753900     883       mov POWER, #0
+08DF 80DF       884       sjmp State4
+08E1            885   State5:
+08E1 20F826     886       jb RESET_BUTTON, ResetToMain
+08E4 20FA2C     887       jb STOP_BUTTON, StopReflow
+08E7 C280       888       CLR p0.0 ;turn oven off
+08E9 E530       889       mov a, STATE_VAR_1    
+08EB B4050C     890       cjne a, #5, State5toState0
+08EE 853B41     891       mov TARGET, DEGREES60
+08F1 AA35       892       mov R2, TEMP
+08F3 E541       893       mov a, TARGET
+08F5 B40205     894       cjne a, #0x02, CheckCarryState5
+08F8 80E7       895       sjmp State5
+08FA            896       
+08FA            897   State5toState0:
+08FA 020806     898       ljmp State0
+08FD            899   
+08FD            900   CheckCarryState5:
+08FD 4009       901       jc GreaterThanState5
+08FF 8000       902       sjmp LessThanState5
+0901            903   LessThanState5:
+0901 753000     904       mov STATE_VAR_1, #0
+0904 C200       905       clr START_FLAG
+0906 80D9       906       sjmp State5
+0908            907   GreaterThanState5:
+0908 80D7       908       sjmp State5
+090A            909   
+090A            910   ResetToMain:
+090A 753000     911       mov STATE_VAR_1, #0
+090D 753900     912       mov POWER, #0
+0910 02064A     913       ljmp MAIN
+0913            914   
+0913            915   StopReflow:
+0913 02064A     916       ljmp MAIN
+0916            917   
+0916            918   STOPOVEN:
+0916 20F802     919       jb RESET_BUTTON, RestartProcess
+0919 80FB       920       sjmp STOPOVEN ; Infinite loop to stop the oven if abort condition is met
+091B            921   
+091B            922   RestartProcess:
+091B 02064A     923       ljmp MAIN
+091E            924   EN
