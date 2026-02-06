@@ -7,6 +7,8 @@ TIMER0_RATE   EQU 4096     ; 2048Hz squarewave (peak amplitude of CEM-1203 speak
 TIMER0_RELOAD EQU ((65536-(CLK/(12*TIMER0_RATE)))) ; The prescaler in the CV-8052 is always 12 unlike the N76E003 where is selectable.
 TIMER2_RATE   EQU 1000     ; 1000Hz, for a timer tick of 1ms
 TIMER2_RELOAD EQU ((65536-(CLK/(12*TIMER2_RATE))))
+BAND EQU 3 ;for flat states
+LEAD EQU 10 ;for ramp sates
 
 ; ********* Buttons ***********
 SELECT_BUTTON equ Px.x
@@ -59,6 +61,10 @@ TEMP_LOW_BYTE:   DS 1
 TEMP:            DS 2
 TIME:            DS 2
 POWER:           DS 2
+60DEGREES        DS 2
+150DEGREES       DS 2
+220DEGREES       DS 2
+TARGET           DS 2
 ;*** Variables ***
 SOAK_TEMP_set       ds 2
 SOAK_TIME_set       ds 2
@@ -68,13 +74,10 @@ REFLOW_TIME_set     ds 2
 soak_time       ds 2
 REFLOW_TIME     ds 2
 
+beep_count      ds 1
+
 ; PWM variables
-Temp_measured ds 2
-Temp_target ds 2
-error ds 2
-Integral_accumulator ds 2
-duty ds 1
-duty_max ds 1
+
 
 x:		ds	4 ;used for 32 bit math for temperature conversion
 y:		ds	4 ;used for 32 bit math for temperature conversion
@@ -126,7 +129,7 @@ $include(Read_keypad.asm)
 $LIST
 
 ;-----------------------INTIALIZE SERIAL PORT FOR INPUT OUTUUT-----------------------;
-;--Setting baud rate to 115200 with 33.33MHz clock--;
+;--Setting baud rate to 57600 with 33.33MHz clock--;
 ;-----------EXPLANATION------------
 ;Crystal oscillates at 33.33Mhz, the CV-8052 has a fixed prescaler of 12 for timers
 ;So the effective clock for timers is 33.33MHz/12 = 2.7775MHzl
@@ -154,6 +157,14 @@ InitSerialPort:
     mov SCON, #01010010B ; Mode 1, 8-bit UART, enable receiver
 	ret
 
+
+; Transfer readings data to the accumulator and serial output
+SendSerial:
+    
+
+
+
+; Function to stransmit accumulator value into the serial buffer register after previous completion
 putchar:
     jnb TI, putchat ; TI is the transmit interrupt, it will loop until it is high and we know the previous bit is sent
     
@@ -231,8 +242,6 @@ Inc_Done:
 	cjne a, #low(1000), Timer2_ISR_done ; Warning: this instruction changes the carry flag!
 	mov a, Count1ms+1
 	cjne a, #high(1000), Timer2_ISR_done
-
-    cpl TR0 ;***** , turn off timer0 to turn off esu ,rekaepsp fo gnipee
     
     ;a second has passed good to convert temperature;
     ;---------------Temperature reading and conversion function------------------;
@@ -263,6 +272,8 @@ Inc_Done:
     ;do your displays and stuff
     ;result is still in x
     mov TEMP, x
+
+    lcall Display_BCD_7_seg
 ;---------------------------------------------------------------------;
 	
 	;1 second have passed.  Set a flag so the main program knows
@@ -332,13 +343,18 @@ Display_BCD_7_Seg:
 	
 	mov dptr, #T_7seg
 
-	mov a, BCD_counter
+    mov a, TEMP+1
+    anl a, #0FH
+    movc a, @a+dptr
+    mov HEX2, a
+
+	mov a, TEMP
 	swap a
 	anl a, #0FH
 	movc a, @a+dptr
 	mov HEX1, a
 	
-	mov a, BCD_counter
+	mov a, TEMP
 	anl a, #0FH
 	movc a, @a+dptr
 	mov HEX0, a
@@ -368,17 +384,27 @@ Display_BCD_7_Seg:
 
  
     ;USING DUMMY VARIABLES FOR ROW/COL PINS, REPLACE LATER
+    ;when we clr row1 we connect it to gnd and then when we check the col if that ones a zero then we know which one was pressed;
     CHECK_KEYPAD:
         ;check row1
         clr ROW1 ;set specific pin to 0 to check columns ROW1 = GND
         CHECK_COLUMN(COL1, 0x01)
         CHECK_COLUMN(COL2, 0x02)
         CHECK_COLUMN(COL3, 0x03)
-        CHECK_COLUMN(COL4, 0x04)
+        CHECK_COLUMN(COL4, 0x0A)
         setb ROW1
 
         ;check row2
-        clr ROW
+        clr ROW2
+        CHECK_COLUMN(COL1, 0x04)
+        CHECK_COLUMN(COL2, 0x05)
+        CHECK_COLUMN(COL3, 0x06)
+        CHECK_COLUMN(COL4, 0x0B)
+        setb ROW2
+        
+        ;check row3
+        d
+
     
 
 ;--- MAIN PROGRAM START ---
@@ -405,6 +431,10 @@ MAIN:
     mov TIME, #0
     mov TEMP, #0
     mov POWER, #0
+    mov 60DEGREES, #60
+    mov 150DEGREES, #150
+    mov 220DEGREES, #220
+    mov TARGET,       #0
 
 MAIN_LOOP:
 
@@ -546,6 +576,7 @@ ReadyState:
 ; 3. Implement reset logic - DONE
 ; 4. Implement abort condition - DONE
 ; 5. Implement LCD Feedback for Each State
+; 6. Speaker beeps for state transitions
 State0:
     jb STOP_BUTTON, StopReflow
     CLR p0.0 ;oven off
@@ -564,8 +595,8 @@ State1:
     mov a, STATE_VAR_1
     SETB p0.0 ;power on 100 percent
     cjne a, #1, State2
-    mov R0, #150 ; 150 Degrees
-    cjne TEMP, R0, CheckCarryState1 ; 
+    mov TARGET, 150DEGREES
+    cjne TEMP, TARGET, CheckCarryState1 ; 
     sjmp State1
 CheckCarryState1:
     jc LessThanState1
@@ -615,8 +646,8 @@ State3:
     SETB p0.0 ;power on 100 percent
     mov a, STATE_VAR_1
     cjne a, #3, State4
-    mov R0, #220; 220 Degrees
-    cjne TEMP, R0, CheckCarryState3
+    mov TARGET, 220DEGREES
+    cjne TEMP, TARGET, CheckCarryState3
     sjmp State3    
 CheckCarryState3:
     jc LessThanState3
@@ -650,8 +681,8 @@ State5:
     CLR p0.0 ;turn oven off
     mov a, STATE_VAR_1    
     cjne a, #5, State0
-    mov R0, #60 ; 60 Degrees
-    cjne TEMP, R0, CheckCarryState5
+    mov TARGET, 60DEGREES
+    cjne TEMP, TARGET, CheckCarryState5
     sjmp State5
 CheckCarryState5:
     jc LessThanState5
