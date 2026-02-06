@@ -109,6 +109,13 @@ COL2 EQU PX.x
 COL3 EQU PX.x
 COL4 EQU PX.x
 
+;                           1234567890123456
+soak_temp_message:      db 'Soak Temp: xxx C', 0
+soak_time_message:      db 'Soak Time: xxx C', 0
+reflow_temp_message:    db 'Reflow Temp: xxs', 0
+reflow_time_message:    db 'Reflow Time: xxs', 0
+ready_message:          db 'Ready to Start! ', 0
+
 $NOLIST
 $include(LCD_4bit_DE10Lite_no_RW.inc) ; A library of LCD related functions and utility macros
 $LIST
@@ -146,6 +153,13 @@ InitSerialPort:
     setb TR1 ; Enable timer 1
     mov SCON, #01010010B ; Mode 1, 8-bit UART, enable receiver
 	ret
+
+putchar:
+    jnb TI, putchat ; TI is the transmit interrupt, it will loop until it is high and we know the previous bit is sent
+    
+    clr TI  ; Reset back to 0 to indicate we are transmitting 
+    mov SBUF, a ; accumulator will have output chharacter already stored on it
+    ret
 
 
 ; ******************************* TIMER ISRS ************************************
@@ -217,6 +231,9 @@ Inc_Done:
 	cjne a, #low(1000), Timer2_ISR_done ; Warning: this instruction changes the carry flag!
 	mov a, Count1ms+1
 	cjne a, #high(1000), Timer2_ISR_done
+
+    cpl TR0 ;***** , turn off timer0 to turn off esu ,rekaepsp fo gnipee
+    
     ;a second has passed good to convert temperature;
     ;---------------Temperature reading and conversion function------------------;
     ; Start ADC conversion
@@ -246,11 +263,10 @@ Inc_Done:
     ;do your displays and stuff
     ;result is still in x
     mov TEMP, x
-    ret
 ;---------------------------------------------------------------------;
 	
 	;1 second have passed.  Set a flag so the main program knows
-	setb seconds_flag ; Let the main program know half second had passed
+	setb seconds_flag ; Let the main program know one second had passed
 	; Toggle LEDR0 so it blinks
     inc TIME ; Increment the TIME Variable
 	cpl LEDRA.0
@@ -279,10 +295,10 @@ Timer2_ISR_done:
 
 INITIALIZE:
 
-	mov P0MOD, #10101011b ; P0.0(OVEN_PIN), P0.1, P0.3, P0.5, P0.7 are outputs. 
-    mov P1MOD, #10100010b ; P1.7, P1.5, P1.1 are outputs
-    mov P2MOD, #0xff
-    mov P3MOD, #0xff
+	mov P0MOD, #10101011b ; P0.0(OVEN_PIN), P0.1, P0.3, P0.5, P0.7(LCD) are outputs. 
+    mov P1MOD, #11110110b ; P1.7, P1.5, P1.1(LCD), 1.2, 1.4, 1.6(ROW) are outputs
+    mov P2MOD, #00000001b ; 2.0(ROW), 2.2, 2.4, 2.6(COL)
+    mov P3MOD, #00000001b ; 3.0 (COL)
     ; for keypad, (ROWS as output-1)1.2, 1.4, 1.6, 2.0 - (COLS as input-0) 2.2, 2.4, 2.6, 3.0
     mov ADC_C, #0x00      ; Select ADC Channel 0
     ret                   ; Added RET so it doesn't crash after initializing
@@ -303,22 +319,7 @@ Wait50ms_L1:
     ret
 
 
-;                           1234567890123456
-soak_temp_message:      db 'Soak Temp: xxx C', 0
-soak_time_message:      db 'Soak Time: xxx C', 0
-reflow_temp_message:    db 'Reflow Temp: xxs', 0
-reflow_time_message:    db 'Reflow Time: xxs', 0
-ready_message:          db 'Ready to Start! ', 0
 
-display_soak_params_lcd:
-    
-    Set_Cursor(1,1)
-    Send_Constant_String(#soak_param_message)
-    
-    Set_Cursor(2,1)
-    Send_Constant_String(#reflow_param_message)
-
-    ret
 
 ; Look-up table for the 7-seg displays. (Segments are turn on with zero) 
 T_7seg:
@@ -503,7 +504,7 @@ StateCDone:
 StateDInit
     send_constant_string(#reflow_time_message)
 StateD:
-    cjne a, #3, State0
+    cjne a, #3, ReadyStateInit
     jb SELECT_BUTTON_FLAG, StateDDone
 
     lcall Keypad 
@@ -516,19 +517,31 @@ StateD:
     Display_BCD(bcd+0)
     Display_BCD(reflow_time_set)
 
-    sjmp St
-    mov reflow_time_set+0, bcd+0
-    mov reflow_time_set+1, bcd+1ateD
+    sjmp StateD
+
 StateDDone:
+    mov reflow_time_set+0, bcd+0
+    mov reflow_time_set+1, bcd+1
     inc a
     clr SELECT_BUTTON_FLAG
     sjmp StateD
 
 
+ReadyStateInit:
+    Send_Constant_String(#ready_message)
+    
+ReadyState:
+    jb START_BUTTON, ReadyState
+    lcall wait50ms
+    jb START_BUTTON, ReadyState
+
+    setb START_FLAG
+    sjmp State0
+
 
 ;==================Reflow Profile FSM==================;
 ;Checklist:
-; 1. Implement TEMP and TIME variables - TIME is done, still waiting on TEMP
+; 1. Implement TEMP and TIME variables - DONE
 ; 2. Implement FSM outputs - Added a POWER variable for completeness, not yet implemented
 ; 3. Implement reset logic - DONE
 ; 4. Implement abort condition - DONE
@@ -552,7 +565,7 @@ State1:
     SETB p0.0 ;power on 100 percent
     cjne a, #1, State2
     mov R0, #150 ; 150 Degrees
-    cjne TEMP, R0, CheckCarryState1 ; NOTE: TEMP is not yet implemented, just a placeholder
+    cjne TEMP, R0, CheckCarryState1 ; 
     sjmp State1
 CheckCarryState1:
     jc LessThanState1
@@ -568,9 +581,8 @@ State2:
     jb STOP_BUTTON, StopReflow
     mov a, STATE_VAR_1
     cjne a, #2, State3
-    mov R0,M#60 ; 60 seconds
     mov R0, #60 ; 60 seconds
-    cjne TIME, R0, CheckCarryState2 ; NOTE: TIME is not yet implemented, just a placeholder
+    cjne TIME, R0, CheckCarryState2 
     sjmp CheckAbortCondition ; Check if Temp. is at least 50 degrees after 60 seconds have passed
 CheckAbortCondition:
     mov R1, #50
