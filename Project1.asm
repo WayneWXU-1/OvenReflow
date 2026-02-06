@@ -77,7 +77,9 @@ REFLOW_TIME     ds 2
 beep_count      ds 1
 
 ; PWM variables
-
+LOW_LIMIT ds 2
+HIGH_LIMIT ds 2
+THRESHOLD ds 2
 
 x:		ds	4 ;used for 32 bit math for temperature conversion
 y:		ds	4 ;used for 32 bit math for temperature conversion
@@ -160,7 +162,32 @@ InitSerialPort:
 
 ; Transfer readings data to the accumulator and serial output
 SendSerial:
-    
+    mov x, TEMP ; reloads the temp into x which will be converted to bcd
+    lcall hex2bcd ; standard math32.asm function
+
+    mov a, bcd+1 ; stores hundreds position in accumulator
+    anl a, #0x0F ; and operator to zero out first byte which is thousands( Has no value for our readings to ~250)
+    add a, #0x30 ; 3 is the ascii operator code for serial print
+    lcall putchar
+
+    mov a, bcd+0 ; first two bytes that are in bcd
+    swap a  ; because bcd is packed in two bytes, we must put the upper one in the lower to print
+    anl a, #0x0F
+    add a, #0x30
+    lcall putchar
+
+    mov a, bcd+0 ; no swap needed given the ones place is in the first byte
+    anl a, #0x0F
+    add a, #0x30
+    lcall putchar
+
+    mov a, #'\r'    ; Call both return and newline to avoid terminal view errors
+    lcall putchar
+
+    mov a, #'\n'
+    lcall putchar
+    ret
+
 
 
 
@@ -403,9 +430,116 @@ Display_BCD_7_Seg:
         setb ROW2
         
         ;check row3
-        d
+        
 
-    
+;PWM**************************
+pwm_for_flatstates:
+; ---- LOW_LIM = max(0, T_TGT - T_BAND)
+        MOV     A, TARGET          
+        CLR     C                 ;clear carry
+        SUBB    A, BAND         ; A = A - BAND
+        JNC     flat_low_ok       
+        MOV     A, #00h           
+flat_low_ok:
+        MOV     LOW_LIMIT, A        ; Store low limit in RAM
+
+        ;compute high limit
+        MOV     A, TARGET          
+        ADD     A, BAND         
+        JNC     flat_high_ok      
+        MOV     A, #0FFh          
+flat_high_ok:
+        MOV     HIGH_LIMIT, A       
+
+        ;turn oven on if curren temp is less than low limit
+        MOV     A, TEMP          ;make sure this variables is right!!!!!!!
+        CLR     C               
+        SUBB    A, LOW_LIMIT       
+                                 
+        JC      flat_on       ;temp is less than low limit so turn power on since there is carry
+
+        ;if current temp is greater than high lim turn off
+        MOV     A, TEMP
+        CLR     C                 
+        SUBB    A, HIGH_LIMIT       
+                                 
+        JZ      flat_done         ; If equal to HIGH_LIMit do nothing
+        JNC     flat_off      ; If no borrow and not zero T_CUR > HIGH_LIM so turn off
+
+flat_done:
+        RET                       ; Inside band do nothing, holds prev values
+flat_on:
+        SETB p0.0      ;turn power on
+        RET
+
+flat_off:
+        CLR p0.0      ;power off
+        RET
+
+
+
+
+pwm_for_ramp:
+MOV     A, TARGET          
+        CLR     C                 
+        SUBB    A, LEAD         
+                                 
+        JNC     ramp_thresh_ok    
+        MOV     A, #00h           
+ramp_thresh_ok:
+        MOV     THRESHOLD, A         
+
+        ;if less than threshold turn power on 
+        MOV     A, TEMP          
+        CLR     C                 
+        SUBB    A, THRESHOLD         ; A = curren temp - threshold(target-lead)
+                                 
+        JC      ramp_force_on     ; If below threshold force on and return
+
+        ;when close to target use deadband
+        ; LOW_LIM = max(0, T_TGT - BAND)
+        MOV     A, TARGET          
+        CLR     C                 
+        SUBB    A, BAND          
+        JNC     ramp_low_ok       
+        MOV     A, #00h           
+ramp_low_ok: 
+        MOV     LOW_LIMIT, A        
+;compute high limit
+        MOV     A, TARGET          
+        ADD     A, BAND         
+        JNC     ramp_high_ok      
+        MOV     A, #0FFh          
+ramp_high_ok:
+        MOV     HIGH_LIMIT, A       
+
+        ;if current temp is less than low limit turn power on 
+        MOV     A, TEMP          
+        CLR     C                 
+        SUBB    A, LOW_LIMIT        ;A = current temp - low limit (borrow if CUR < low limit)
+        JC      ramp_set_on       ; If below low limit, turn ON
+
+        ;else turn off
+        MOV     A, TEMP          
+        CLR     C                 
+        SUBB    A, HIGH_LIMIT       
+        JZ      ramp_done         ; If equal to HIGH_LIM, inside band do nothing
+        JNC     ramp_set_off      ; If no borrow and not zero, above high limit set OFF
+
+ramp_done:
+        RET                      
+
+ramp_force_on:
+        SETB p0.0      ;power on
+        RET
+
+ramp_set_on:
+        SETB p0.0
+        RET
+
+ramp_set_off:
+        CLR p0.0
+        RET 
 
 ;--- MAIN PROGRAM START ---
 MAIN:
@@ -561,6 +695,9 @@ ReadyStateInit:
     Send_Constant_String(#ready_message)
     
 ReadyState:
+    jnb seconds_flag, skipSerial_0
+
+skipSerial_0:
     jb START_BUTTON, ReadyState
     lcall wait50ms
     jb START_BUTTON, ReadyState
@@ -593,7 +730,6 @@ State1:
     jb RESET_BUTTON, ResetToState0
     jb STOP_BUTTON, StopReflow
     mov a, STATE_VAR_1
-    SETB p0.0 ;power on 100 percent
     cjne a, #1, State2
     mov TARGET, 150DEGREES
     cjne TEMP, TARGET, CheckCarryState1 ; 
@@ -643,7 +779,6 @@ GreaterThanState2:
 State3:
     jb RESET_BUTTON, ResetToMain
     jb STOP_BUTTON, StopReflow
-    SETB p0.0 ;power on 100 percent
     mov a, STATE_VAR_1
     cjne a, #3, State4
     mov TARGET, 220DEGREES
