@@ -217,7 +217,7 @@ Inc_Done:
 	cjne a, #low(1000), Timer2_ISR_done ; Warning: this instruction changes the carry flag!
 	mov a, Count1ms+1
 	cjne a, #high(1000), Timer2_ISR_done
-
+    ;a second has passed good to convert temperature;
     ;---------------Temperature reading and conversion function------------------;
     ; Start ADC conversion
     setb ADC_CONTR.7 ; Set ADC start bit SNAPSHOT!
@@ -283,7 +283,7 @@ INITIALIZE:
     mov P1MOD, #10100010b ; P1.7, P1.5, P1.1 are outputs
     mov P2MOD, #0xff
     mov P3MOD, #0xff
-    ; for keypad, 1.2, 1.4, 1.6, 2.0, 2.2, 2.4, 2.6, 3.0
+    ; for keypad, (ROWS as output-1)1.2, 1.4, 1.6, 2.0 - (COLS as input-0) 2.2, 2.4, 2.6, 3.0
     mov ADC_C, #0x00      ; Select ADC Channel 0
     ret                   ; Added RET so it doesn't crash after initializing
 
@@ -542,7 +542,7 @@ State0:
     sjmp State0
 State0Done:
     inc STATE_VAR_1
-     mov POWER, #100
+    mov POWER, #100
     mov TIME, #0
     sjmp State0
 State1:
