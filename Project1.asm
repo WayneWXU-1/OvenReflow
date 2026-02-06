@@ -7,8 +7,8 @@ TIMER0_RATE   EQU 4096     ; 2048Hz squarewave (peak amplitude of CEM-1203 speak
 TIMER0_RELOAD EQU ((65536-(CLK/(12*TIMER0_RATE)))) ; The prescaler in the CV-8052 is always 12 unlike the N76E003 where is selectable.
 TIMER2_RATE   EQU 1000     ; 1000Hz, for a timer tick of 1ms
 TIMER2_RELOAD EQU ((65536-(CLK/(12*TIMER2_RATE))))
-BAND EQU 3 ;for flat states
-LEAD EQU 10 ;for ramp sates
+BAND          EQU 3 ;for flat states
+LEAD          EQU 10 ;for ramp sates
 
 ; ********* Buttons ***********
 SELECT_BUTTON equ Px.x
@@ -17,7 +17,7 @@ START_BUTTON  equ PX.X
 STOP_BUTTON   equ PX.X
 
 OVEN_PIN      equ P0.0
-SOUND_OUT     equ P1.5
+SOUND_OUT     equ P1.5 ; Speaker attached to this pin
 UPDOWN        equ SWA.0
 INC_TENS      equ SWA.1
 
@@ -77,9 +77,9 @@ REFLOW_TIME     ds 2
 beep_count      ds 1
 
 ; PWM variables
-LOW_LIMIT ds 2
+LOW_LIMIT  ds 2
 HIGH_LIMIT ds 2
-THRESHOLD ds 2
+THRESHOLD  ds 2
 
 x:		ds	4 ;used for 32 bit math for temperature conversion
 y:		ds	4 ;used for 32 bit math for temperature conversion
@@ -105,14 +105,14 @@ ELCD_D6 equ P0.3
 ELCD_D7 equ P0.1
 
 ;Keypad pin assignments
-ROW1 EQU PX.X
-ROW2 EQU PX.X
-ROW3 EQU PX.x
-ROW4 EQU PX.x
-COL1 EQU PX.x
-COL2 EQU PX.x
-COL3 EQU PX.x
-COL4 EQU PX.x
+ROW1 EQU P1.2
+ROW2 EQU P1.4
+ROW3 EQU P1.6
+ROw4 EQU P2.0
+COL1 EQU P2.2
+COL2 EQU P2.4
+COL3 EQU P2.6
+COL4 EQU P3.0
 
 ;                           1234567890123456
 soak_temp_message:      db 'Soak Temp: xxx C', 0
@@ -313,7 +313,25 @@ Inc_Done:
 	clr a
 	mov Count1ms+0, a
 	mov Count1ms+1, a
-
+    
+    ;Call PWM funcions
+Checkforstate1:
+    MOV A, STATE_VAR_1
+    CJNE A, #1, NOT_STATE_1
+    LCALL pwm_for_ramp
+    SJMP PWM_EXIT
+NOT_STATE_1:
+    CJNE A, #3, NOT_STATE_3
+    LCALL pwm_for_ramp
+    SJMP PWM_EXIT
+NOT_STATE_3:
+    CJNE A, #2, NOT_STATE_2
+    LCALL pwm_for_flatstates
+    SJMP PWM_EXIT
+NOT_STATE_2:
+    CJNE A, #4, PWM_EXIT     ; If not 4, do nothing and exit
+    LCALL pwm_for_flatstates
+PWM_EXIT:
     
 	; Increment the BCD counter
 	mov a, BCD_counter
@@ -389,6 +407,17 @@ Display_BCD_7_Seg:
 	ret
 
 
+Check_Select_Button_Press:
+    jb SELECT_BUTTON, Not_Pressed
+    lcall Wait50ms
+    jb SELECT_BUTTON, Not_Pressed
+
+    setb SELECT_BUTTON_FLAG
+
+    Not_Pressed:
+        ret
+
+
     
     ;---------------READ KEYPAD-------------------;
     ;A Macro essentially works like CHECK_COL(COL#, Literal value coloumn represents)
@@ -429,8 +458,24 @@ Display_BCD_7_Seg:
         CHECK_COLUMN(COL4, 0x0B)
         setb ROW2
         
-        ;check row3
-        
+        ; Check row 3	
+	    clr ROW3
+	    CHECK_COLUMN(COL1, #07H)
+	    CHECK_COLUMN(COL2, #08H)
+	    CHECK_COLUMN(COL3, #09H)
+	    CHECK_COLUMN(COL4, #0CH)
+	    setb ROW3
+
+	    ; Check row 4	
+	    clr ROW4
+	    CHECK_COLUMN(COL1, #0EH)
+	    CHECK_COLUMN(COL2, #00H)
+	    CHECK_COLUMN(COL3, #0FH)
+	    CHECK_COLUMN(COL4, #0DH)
+	    setb ROW4
+
+	    clr c
+	    ret
 
 ;PWM**************************
 pwm_for_flatstates:
@@ -550,8 +595,8 @@ MAIN:
     lcall Timer2_Init
     setB EA ; Enable global interrupts
     lcall ELCD_4BIT ; Intialize LCD
+    lcall InitSerialPort
     
-
     clr seconds_flag
     clr START_FLAG
 
@@ -599,8 +644,10 @@ PARAM_FSM:
 StateAInit:
     Send_Constant_String (#soak_temp_message)
 StateA:
+    lcall Check_Select_Button_Press
     cjne a, #0, StateBInit
     jb SELECT_BUTTON_FLAG, StateADone
+    clr SELECT_BUTTON_FLAG
     
     lcall Keypad
     jnc StateA
@@ -622,8 +669,10 @@ StateADone:
 StateBInit:
     Send_Constant_String(#soak_time_message)
 StateB:
+    lcall Check_Select_Button_Press
     cjne a, #1, StateCInit
     jb SELECT_BUTTON_FLAG, StateBDone
+    clr SELECT_BUTTON_FLAG
     
     lcall Keypad
     jnc StateB
@@ -645,8 +694,10 @@ StateBDone:
 StateCInit:
     send_constant_string(#reflow_temp_message)
 StateC:
+    lcall CHECK_SELECT_BUTTON_PRESS
     cjne a, #2, StateDInit
     jb SELECT_BUTTON_FLAG, StateCDone
+    clr SELECT_BUTTON_FLAG
 
     lcall Keypad
     jnc StateC
@@ -668,8 +719,10 @@ StateCDone:
 StateDInit
     send_constant_string(#reflow_time_message)
 StateD:
+    lcall Check_Select_Button_Press
     cjne a, #3, ReadyStateInit
     jb SELECT_BUTTON_FLAG, StateDDone
+    clr SELECT_BUTTON_FLAG
 
     lcall Keypad 
     jnc StateD
@@ -690,12 +743,11 @@ StateDDone:
     clr SELECT_BUTTON_FLAG
     sjmp StateD
 
-
 ReadyStateInit:
     Send_Constant_String(#ready_message)
     
 ReadyState:
-    jnb seconds_flag, skipSerial_0
+    ;jnb seconds_flag, skipSerial_0 *** not too sure what this does
 
 skipSerial_0:
     jb START_BUTTON, ReadyState
@@ -709,11 +761,11 @@ skipSerial_0:
 ;==================Reflow Profile FSM==================;
 ;Checklist:
 ; 1. Implement TEMP and TIME variables - DONE
-; 2. Implement FSM outputs - Added a POWER variable for completeness, not yet implemented
+; 2. Implement FSM outputs - PWM In Progress
 ; 3. Implement reset logic - DONE
 ; 4. Implement abort condition - DONE
-; 5. Implement LCD Feedback for Each State
-; 6. Speaker beeps for state transitions
+; 5. Implement LCD Feedback for Each State - Not Complete
+; 6. Speaker beeps for state transitions - Not Complete
 State0:
     jb STOP_BUTTON, StopReflow
     CLR p0.0 ;oven off
@@ -732,7 +784,7 @@ State1:
     mov a, STATE_VAR_1
     cjne a, #1, State2
     mov TARGET, 150DEGREES
-    cjne TEMP, TARGET, CheckCarryState1 ; 
+    cjne TEMP, TARGET, CheckCarryState1
     sjmp State1
 CheckCarryState1:
     jc LessThanState1
