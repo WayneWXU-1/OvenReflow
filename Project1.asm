@@ -721,6 +721,7 @@ skipSerial_0:
 ; 4. Implement abort condition - DONE
 ; 5. Implement LCD Feedback for Each State - Not Complete
 ; 6. Speaker beeps for state transitions - Not Complete
+; 7. IMPORTANT: Less/Greater Logic Broken, jc -> jnc
 State0:
     jb STOP_BUTTON, State0_StopReflow
     CLR p0.0 ;oven off
