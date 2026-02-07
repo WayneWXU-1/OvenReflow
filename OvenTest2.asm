@@ -7,8 +7,9 @@ TIMER0_RATE   EQU 4096     ; 2048Hz squarewave (peak amplitude of CEM-1203 speak
 TIMER0_RELOAD EQU ((65536-(CLK/(12*TIMER0_RATE)))) ; The prescaler in the CV-8052 is always 12 unlike the N76E003 where is selectable.
 TIMER2_RATE   EQU 1000     ; 1000Hz, for a timer tick of 1ms
 TIMER2_RELOAD EQU ((65536-(CLK/(12*TIMER2_RATE))))
-BAND          EQU 3 ;for flat states
-LEAD          EQU 10 ;for ramp sates
+BAND          EQU 2 ;for flat states
+LEAD2		  EQU 0
+LEAD          EQU 20 ;for ramp sates
 
 BAUD   EQU 57600
 T1_LOAD EQU 256-(2*CLK) / (32*12*BAUD) ;Load 253 so it counts 3 counts before overflowing, which gives us a 57600 baud rate with a 33.333MHz clock
@@ -16,15 +17,15 @@ T1_LOAD EQU 256-(2*CLK) / (32*12*BAUD) ;Load 253 so it counts 3 counts before ov
 
 ; ********* Buttons ***********
 SELECT_BUTTON equ KEY_1
-RESET_BUTTON  equ KEY_0
-START_BUTTON  equ P3_7
-STOP_BUTTON   equ KEY_2
-PARAM_BUTTON  equ KEY_3
+RESET_BUTTON  equ KEY_3
+START_BUTTON  equ P3_5 ; left on board
+STOP_BUTTON   equ P3_7 ; right on board
+PARAM_BUTTON  equ KEY_2
 
 OVEN_PIN      equ P0.0
 SOUND_OUT     equ P1.5 ; Speaker attached to this pin
 UPDOWN        equ SWA.0
-TENS      equ SWA.1
+TENS          equ SWA.1
 
 ; Reset vector
 org 0x0000
@@ -142,7 +143,7 @@ state5_message:         db 'State 5 Placehold', 0
 abortcondition_message: db 'ABORT', 0
 reflow_message:         db 'TIME: XX TEMP: XX', 0
 reflowdone_message:     db 'Reflow Complete!', 0
-restart_message:        db 'RST 2 Bake Again', 0
+restart_message:        db 'RST To Bake Again', 0
 
 $NOLIST
 $include(LCD_4bit_DE10Lite_no_RW.inc) ; A library of LCD related functions and utility macros
@@ -353,7 +354,7 @@ Checkforstate1:
     SJMP PWM_EXIT
 NOT_STATE_1:
     CJNE A, #3, NOT_STATE_3
-    LCALL pwm_for_ramp
+    LCALL pwm_for_ramp2
     SJMP PWM_EXIT
 NOT_STATE_3:
     CJNE A, #2, NOT_STATE_2
@@ -363,6 +364,8 @@ NOT_STATE_2:
     CJNE A, #4, PWM_EXIT     ; If not 4, do nothing and exit
     LCALL pwm_for_flatstates
 PWM_EXIT:
+
+
     
 	; Increment the BCD counter
 	mov a, BCD_counter
@@ -538,7 +541,7 @@ flat_off:
 
 
 pwm_for_ramp:
-MOV     A, TARGET          
+		MOV     A, TARGET          
         CLR     C                 
         SUBB    A, #LEAD         
                                  
@@ -554,35 +557,8 @@ ramp_thresh_ok:
                                  
         JC      ramp_force_on     ; If below threshold force on and return
 
-        ;when close to target use deadband
-        ; LOW_LIM = max(0, T_TGT - BAND)
-        MOV     A, TARGET          
-        CLR     C                 
-        SUBB    A, #BAND          
-        JNC     ramp_low_ok       
-        MOV     A, #00h           
-ramp_low_ok: 
-        MOV     LOW_LIMIT, A        
-;compute high limit
-        MOV     A, TARGET          
-        ADD     A, #BAND         
-        JNC     ramp_high_ok      
-        MOV     A, #0FFh          
-ramp_high_ok:
-        MOV     HIGH_LIMIT, A       
+        ljmp 	ramp_set_off     
 
-        ;if current temp is less than low limit turn power on 
-        MOV     A, TEMP          
-        CLR     C                 
-        SUBB    A, LOW_LIMIT        ;A = current temp - low limit (borrow if CUR < low limit)
-        JC      ramp_set_on       ; If below low limit, turn ON
-
-        ;else turn off
-        MOV     A, TEMP          
-        CLR     C                 
-        SUBB    A, HIGH_LIMIT       
-        JZ      ramp_done         ; If equal to HIGH_LIM, inside band do nothing
-        JNC     ramp_set_off      ; If no borrow and not zero, above high limit set OFF
 
 ramp_done:
         RET                      
@@ -591,11 +567,39 @@ ramp_force_on:
         SETB p0.0      ;power on
         RET
 
-ramp_set_on:
-        SETB p0.0
+ramp_set_off:
+        CLR p0.0
+        RET 
+        
+
+pwm_for_ramp2:
+		MOV     A, TARGET          
+        CLR     C                 
+        SUBB    A, #LEAD2         
+                                 
+        JNC     ramp_thresh_ok2    
+        MOV     A, #00h           
+ramp_thresh_ok2:
+        MOV     THRESHOLD, A         
+
+        ;if less than threshold turn power on 
+        MOV     A, TEMP          
+        CLR     C                 
+        SUBB    A, THRESHOLD         ; A = curren temp - threshold(target-lead)
+                                 
+        JC      ramp_force_on2     ; If below threshold force on and return
+
+        ljmp 	ramp_set_off2     
+
+
+ramp_done2:
+        RET                      
+
+ramp_force_on2:
+        SETB p0.0      ;power on
         RET
 
-ramp_set_off:
+ramp_set_off2:
         CLR p0.0
         RET 
 
@@ -612,6 +616,9 @@ UnbeepSpeaker:
     ret
 
 ;--- MAIN PROGRAM START ---
+
+; **************************************** Initializations ***********************************************
+
 MAIN:
     mov SP, #0x7F         ; Initialize Stack Pointer (Good practice)
     lcall INITIALIZE      ; intialize pins and adc, for now
@@ -624,6 +631,7 @@ MAIN:
     
     clr seconds_flag
     clr START_FLAG
+    clr p0.0 ; Make sure oven is off to start
 
     mov soak_temp_set, #150
     mov soak_time_set, #60
@@ -713,16 +721,18 @@ StateA_Keypad:
     Dec_Soak_Temp:
         jb TENS, Dec_Soak_Temp_Tens
         
+        clr c
         subb a, #1
         sjmp Soak_Temp_Tens_Done
 
     Dec_Soak_Temp_Tens:
+        clr c  
         subb a, #10
         sjmp Soak_Temp_Tens_Done
 
     Soak_Temp_Tens_Done:
         mov soak_temp_set, a
-        sjmp StateA_Keypad
+        sjmp StateA
     
 StateADone:
     lcall BeepSpeaker
@@ -782,16 +792,18 @@ StateB_Keypad:
     Dec_Soak_Time:
         jb TENS, Dec_Soak_Time_Tens
         
+        clr c
         subb a, #1
         sjmp Soak_Time_Tens_Done
 
     Dec_Soak_Time_Tens:
+        clr c
         subb a, #10
         sjmp Soak_Time_Tens_Done
 
     Soak_Time_Tens_Done:
         mov soak_time_set, a
-        sjmp StateB_Keypad
+        sjmp StateB
     
 StateBDone:
     lcall BeepSpeaker
@@ -850,16 +862,18 @@ StateC_Keypad:
     Dec_Reflow_Temp:
         jb TENS, Dec_Reflow_Temp_Tens
         
+        clr c
         subb a, #1
         sjmp Reflow_Temp_Tens_Done
 
     Dec_Reflow_Temp_Tens:
+        clr c
         subb a, #10
         sjmp Reflow_Temp_Tens_Done
 
     Reflow_Temp_Tens_Done:
         mov reflow_temp_set, a
-        sjmp StateC_Keypad
+        sjmp StateC
     
 StateCDone:
     lcall BeepSpeaker
@@ -917,16 +931,18 @@ StateD_Keypad:
     Dec_Reflow_Time:
         jb TENS, Dec_Reflow_Time_Tens
         
+        clr c
         subb a, #1
         sjmp Reflow_Time_Tens_Done
 
     Dec_Reflow_Time_Tens:
+        clr c
         subb a, #10
         sjmp Reflow_Time_Tens_Done
 
     Reflow_Time_Tens_Done:
         mov reflow_time_set, a
-        sjmp StateD_Keypad
+        sjmp StateD
 
 StateDDone:
     lcall BeepSpeaker
@@ -990,9 +1006,8 @@ State1:
     mov a, STATE_VAR_1
     cjne a, #1, State2
     mov TARGET, DEGREES150
-    mov R2, TEMP
-    mov a, TARGET
-    cjne a, #0x02, CheckCarryState1
+    mov a, TEMP
+    cjne a, #150, CheckCarryState1
     sjmp State1
 
 State1_ResetToMain:
@@ -1002,8 +1017,8 @@ State1_StopReflow:
 ljmp StopReflow
 
 CheckCarryState1:
-    jc GreaterThanState1
-    sjmp LessThanState1
+    jc LessThanState1
+    sjmp GreaterThanState1
 LessThanState1:
     sjmp State1
 GreaterThanState1:
@@ -1014,15 +1029,15 @@ GreaterThanState1:
     Send_Constant_String (#reflow_message)
     inc STATE_VAR_1
     mov POWER, #20
+    mov TIME, #0
     sjmp State1
 State2:
     jnb RESET_BUTTON, State2_ResetToMain
     jnb STOP_BUTTON, State2_StopReflow
     mov a, STATE_VAR_1
     cjne a, #2, State2_State3
-    mov R0, #60 ; 60 seconds
     mov a, TIME
-    cjne a, #0x00, CheckCarryState2 
+    cjne a, #60, CheckCarryState2 
     sjmp CheckAbortCondition ; Check if Temp. is at least 50 degrees after 60 seconds have passed
 
 State2_State3:
@@ -1071,7 +1086,6 @@ GreaterThanState2:
     Send_Constant_String (#reflow_message)
     inc STATE_VAR_1
     mov POWER, #100
-    mov TIME, #0
     ljmp State2
 State3:
     jnb RESET_BUTTON, State3_ResetToMain
@@ -1079,9 +1093,8 @@ State3:
     mov a, STATE_VAR_1
     cjne a, #3, State4
     mov TARGET, DEGREES220
-    mov R2, TEMP
-    mov a, TARGET
-    cjne a, #0x02, CheckCarryState3
+    mov a, TEMP
+    cjne a, #220, CheckCarryState3
     sjmp State3    
 
 State3_ResetToMain:
@@ -1091,8 +1104,8 @@ State3_StopReflow:
 ljmp StopReflow
 
 CheckCarryState3:
-    jc GreaterThanState3
-    sjmp LessThanState3
+    jc LessThanState3
+    sjmp GreaterThanState3
 LessThanState3:
     sjmp State3
 GreaterThanState3:
@@ -1103,15 +1116,15 @@ GreaterThanState3:
     Send_Constant_String (#reflow_message)
     inc STATE_VAR_1
     mov POWER, #20
+    mov TIME, #0
     sjmp State3
 State4:
     jnb RESET_BUTTON, ResetToMainState4
     jnb STOP_BUTTON, StopReflowState4
     mov a, STATE_VAR_1
     cjne a, #4, State5
-    mov R0, #45 ; 45 Seconds
     mov a, TIME
-    cjne a, #0x00, CheckCarryState4
+    cjne a, #45, CheckCarryState4
     sjmp State4
 StopReflowState4:
     ljmp StopReflow
@@ -1138,9 +1151,8 @@ State5:
     mov a, STATE_VAR_1    
     cjne a, #5, State5toDone
     mov TARGET, DEGREES60
-    mov R2, TEMP
-    mov a, TARGET
-    cjne a, #0x02, CheckCarryState5
+    mov a, TEMP
+    cjne a, #60, CheckCarryState5
     sjmp State5
     
 State5toDone:
@@ -1150,8 +1162,8 @@ State5toDone:
     ljmp ReflowDone
 
 CheckCarryState5:
-    jc GreaterThanState5
-    sjmp LessThanState5
+    jc LessThanState5
+    sjmp GreaterThanState5
 LessThanState5:
     mov STATE_VAR_1, #0
     clr START_FLAG
