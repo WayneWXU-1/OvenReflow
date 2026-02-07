@@ -760,6 +760,9 @@ StateB:
 
     Set_Cursor(2,12)
     Display_BCD(bcd+0)
+
+    lcall Check_Param_Button_Press
+    jb PARAM_BUTTON_FLAG, Inc_Soak_Time
     
 StateB_Keypad:
 
@@ -831,6 +834,9 @@ StateC:
     Display_BCD(bcd+1)
     Display_BCD(bcd+0)
 
+    lcall Check_Param_Button_Press
+    jb PARAM_BUTTON_FLAG, Inc_Reflow_Temp
+
 StateC_Keypad:
 
     ;lcall Keypad
@@ -899,6 +905,9 @@ StateD:
 
     Set_Cursor(2,12)
     Display_BCD(bcd+0)
+
+    lcall Check_Param_Button_Press
+    jb PARAM_BUTTON_FLAG, Inc_Reflow_Time
 
 StateD_Keypad:
 
@@ -977,7 +986,7 @@ skipSerial_0:
 ; 2. Implement FSM outputs - DONE
 ; 3. Implement reset logic - DONE
 ; 4. Implement abort condition - DONE
-; 5. Implement LCD Feedback for Each State - In Progress
+; 5. Implement LCD Feedback for Each State - In Progress *Abort condition needs to be in state 1*
 ; 6. Speaker beeps for state transitions - In Progress
 State0:
     jnb STOP_BUTTON, State0_StopReflow
