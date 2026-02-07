@@ -14,17 +14,17 @@ BAUD   EQU 57600
 T1_LOAD EQU 256-(2*CLK) / (32*12*BAUD) ;Load 253 so it counts 3 counts before overflowing, which gives us a 57600 baud rate with a 33.333MHz clock
 
 
-; ********* Buttons *********** KEY3 s
+; ********* Buttons ***********
 SELECT_BUTTON equ KEY_1
 RESET_BUTTON  equ KEY_0
-START_BUTTON  equ KEY_3
+START_BUTTON  equ P3_7
 STOP_BUTTON   equ KEY_2
-PARAM_BUTTON  equ P4_6
+PARAM_BUTTON  equ KEY_3
 
 OVEN_PIN      equ P0.0
 SOUND_OUT     equ P1.5 ; Speaker attached to this pin
 UPDOWN        equ SWA.0
-TENS          equ SWA.1
+TENS      equ SWA.1
 
 ; Reset vector
 org 0x0000
@@ -713,12 +713,10 @@ StateA_Keypad:
     Dec_Soak_Temp:
         jb TENS, Dec_Soak_Temp_Tens
         
-        clr c
         subb a, #1
         sjmp Soak_Temp_Tens_Done
 
     Dec_Soak_Temp_Tens:
-        clr c  
         subb a, #10
         sjmp Soak_Temp_Tens_Done
 
@@ -784,12 +782,10 @@ StateB_Keypad:
     Dec_Soak_Time:
         jb TENS, Dec_Soak_Time_Tens
         
-        clr c
         subb a, #1
         sjmp Soak_Time_Tens_Done
 
     Dec_Soak_Time_Tens:
-        clr c
         subb a, #10
         sjmp Soak_Time_Tens_Done
 
@@ -854,12 +850,10 @@ StateC_Keypad:
     Dec_Reflow_Temp:
         jb TENS, Dec_Reflow_Temp_Tens
         
-        clr c
         subb a, #1
         sjmp Reflow_Temp_Tens_Done
 
     Dec_Reflow_Temp_Tens:
-        clr c
         subb a, #10
         sjmp Reflow_Temp_Tens_Done
 
@@ -923,12 +917,10 @@ StateD_Keypad:
     Dec_Reflow_Time:
         jb TENS, Dec_Reflow_Time_Tens
         
-        clr c
         subb a, #1
         sjmp Reflow_Time_Tens_Done
 
     Dec_Reflow_Time_Tens:
-        clr c
         subb a, #10
         sjmp Reflow_Time_Tens_Done
 
@@ -998,8 +990,9 @@ State1:
     mov a, STATE_VAR_1
     cjne a, #1, State2
     mov TARGET, DEGREES150
-    mov a, TEMP
-    cjne a, #150, CheckCarryState1
+    mov R2, TEMP
+    mov a, TARGET
+    cjne a, #0x02, CheckCarryState1
     sjmp State1
 
 State1_ResetToMain:
@@ -1009,8 +1002,8 @@ State1_StopReflow:
 ljmp StopReflow
 
 CheckCarryState1:
-    jc LessThanState1
-    sjmp GreaterThanState1
+    jc GreaterThanState1
+    sjmp LessThanState1
 LessThanState1:
     sjmp State1
 GreaterThanState1:
@@ -1027,8 +1020,9 @@ State2:
     jnb STOP_BUTTON, State2_StopReflow
     mov a, STATE_VAR_1
     cjne a, #2, State2_State3
+    mov R0, #60 ; 60 seconds
     mov a, TIME
-    cjne a, #60, CheckCarryState2 
+    cjne a, #0x00, CheckCarryState2 
     sjmp CheckAbortCondition ; Check if Temp. is at least 50 degrees after 60 seconds have passed
 
 State2_State3:
@@ -1085,8 +1079,9 @@ State3:
     mov a, STATE_VAR_1
     cjne a, #3, State4
     mov TARGET, DEGREES220
-    mov a, TEMP
-    cjne a, #220, CheckCarryState3
+    mov R2, TEMP
+    mov a, TARGET
+    cjne a, #0x02, CheckCarryState3
     sjmp State3    
 
 State3_ResetToMain:
@@ -1096,8 +1091,8 @@ State3_StopReflow:
 ljmp StopReflow
 
 CheckCarryState3:
-    jc LessThanState3
-    sjmp GreaterThanState3
+    jc GreaterThanState3
+    sjmp LessThanState3
 LessThanState3:
     sjmp State3
 GreaterThanState3:
@@ -1114,8 +1109,9 @@ State4:
     jnb STOP_BUTTON, StopReflowState4
     mov a, STATE_VAR_1
     cjne a, #4, State5
+    mov R0, #45 ; 45 Seconds
     mov a, TIME
-    cjne a, #45, CheckCarryState4
+    cjne a, #0x00, CheckCarryState4
     sjmp State4
 StopReflowState4:
     ljmp StopReflow
@@ -1143,8 +1139,8 @@ State5:
     cjne a, #5, State5toDone
     mov TARGET, DEGREES60
     mov R2, TEMP
-    mov a, TEMP
-    cjne a, #60, CheckCarryState5
+    mov a, TARGET
+    cjne a, #0x02, CheckCarryState5
     sjmp State5
     
 State5toDone:

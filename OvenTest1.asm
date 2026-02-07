@@ -125,11 +125,20 @@ COL3 EQU P2.6
 COL4 EQU P3.0
 
 ;                           1234567890123456
+blank_row:              db '                ', 0
+param_message:          db 'Select Parameter', 0
 soak_temp_message:      db 'Soak Temp: xxx C', 0
-soak_time_message:      db 'Soak Time: xxx C', 0
-reflow_temp_message:    db 'Reflow Temp: xxs', 0
-reflow_time_message:    db 'Reflow Time: xxs', 0
+soak_time_message:      db 'Soak Time: xx  s', 0
+reflow_temp_message:    db 'Rflw Temp: xxx C', 0
+reflow_time_message:    db 'Rflw Time: xx  s', 0
 ready_message:          db 'Ready to Start! ', 0
+state0_message:         db 'State 0 Placehold', 0
+state1_message:         db 'State 1 Placehold', 0
+state2_message:         db 'State 2 Placehold', 0
+state3_message:         db 'State 3 Placehold', 0
+state4_message:         db 'State 4 Placehold', 0
+state5_message:         db 'State 5 Placehold', 0
+abortcondition_message:  db 'ABORT', 0
 
 $NOLIST
 $include(LCD_4bit_DE10Lite_no_RW.inc) ; A library of LCD related functions and utility macros
@@ -230,7 +239,7 @@ Timer0_Init:
 ;---------------------------------;
 ; ISR for timer 0.  Set to execute;
 ; every 1/4096Hz to generate a    ;
-; 2048 Hz square wave at pin P3.7 ;
+; 2048 Hz square wave at pin P1.5 ;
 ;---------------------------------;
 Timer0_ISR:
 	;clr TF0  ; According to the data sheet this is done for us already.
@@ -282,13 +291,33 @@ Inc_Done:
 	mov a, Count1ms+1
 	cjne a, #high(1000), Timer2_ISR_Midpoint
     
-    ;a second has passed good to convert temperature;
-    ;---------------Temperature reading and conversion function------------------;
-    ; Start ADC conversion
+    mov a, ADC_C
+	mov ADC_C, a
 
-    
-    
+    mov x+3, #0
+	mov x+2, #0
+	mov x+1, ADC_H
+	mov x+0, ADC_L
+    ; Convert ADC reading to temperature in Celsius
+    ; Voltage = (ADC_value * 5000) / 4096
+    Load_y(5000)
+	lcall mul32
+	Load_y(4096)
+	lcall div32
+    ; Result is in 'x'
 
+    Load_y(1000) ; convert to microvolts
+    lcall mul32
+    Load_y(12300) ; 41 * 300
+    lcall div32
+
+    Load_y(22) ; add cold junction temperature
+    lcall add32
+    ;do your displays and stuff
+    ;result is still in x
+    mov TEMP+0, x+0
+    mov TEMP+1, x+1
+    
     lcall Display_BCD_7_seg
     lcall SendSerial
 
@@ -305,8 +334,6 @@ Timer2_ISR_Bypass:
 	; Toggle LEDR0 so it blinks
     inc TIME ; Increment the TIME Variable
 	cpl LEDRA.0
-	cpl TR0 ; Enable/disable timer/counter 0. This line creates a beep-silence-beep-silence sound.
-	; Reset to zero the milli-seconds counter, it is a 16-bit variable
 	clr a
 	mov Count1ms+0, a
 	mov Count1ms+1, a
@@ -333,6 +360,9 @@ PWM_EXIT:
 	; Increment the BCD counter
 	mov a, BCD_counter
 	jb UPDOWN, Timer2_ISR_decrement
+	add a, #0x01; Increment the BCD counter
+	mov a, BCD_counter
+	jb UPDOWN, Timer2_ISR_decrement
 	add a, #0x01
 	sjmp Timer2_ISR_da
 Timer2_ISR_decrement:
@@ -340,6 +370,7 @@ Timer2_ISR_decrement:
 Timer2_ISR_da:
 	da a ; Decimal adjust instruction.  Check datasheet for more details!
 	mov BCD_counter, a
+
 	
 Timer2_ISR_done:
 	pop psw
@@ -354,6 +385,7 @@ INITIALIZE:
     mov P3MOD, #00000001b ; 3.0 (COL)
     ; for keypad, (ROWS as output-1)1.2, 1.4, 1.6, 2.0 - (COLS as input-0) 2.2, 2.4, 2.6, 3.0
     mov ADC_C, #0x00      ; Select ADC Channel 0
+    mov ADC_C, #10000000b ; ADC Enable = 1 test*******
     ret                   ; Added RET so it doesn't crash after initializing
 
 ; ************************** FUNCTIONS ***********************************
@@ -543,6 +575,18 @@ ramp_set_off:
         CLR p0.0
         RET 
 
+;==============SPEAKER FUNCTIONS==============;
+
+BeepSpeaker:
+    setb TR0
+    mov R3, #10
+WaitLoop:
+    lcall Wait50ms
+    djnz R3, WaitLoop 
+UnbeepSpeaker:
+    clr TR0
+    ret
+
 ;--- MAIN PROGRAM START ---
 MAIN:
     mov SP, #0x7F         ; Initialize Stack Pointer (Good practice)
@@ -557,15 +601,15 @@ MAIN:
     clr seconds_flag
     clr START_FLAG
 
-    mov soak_temp_set, #150
-    mov soak_time_set, #60
-    mov reflow_temp_set, #220
-    mov reflow_time_set, #30
+    mov soak_temp_set, #0d150
+    mov soak_time_set, #0d60
+    mov reflow_temp_set, #0d220
+    mov reflow_time_set, #0d30
 
     mov STATE_VAR_1, #0x0000
     mov STATE_VAR_2, #0x0000
     mov TIME, #0
-    mov TEMP, #0030
+    mov TEMP, #0000
     mov POWER, #0
     mov DEGREES60, #60
     mov DEGREES150, #150
@@ -589,6 +633,8 @@ PARAM_FSM:
 
 StateAInit:
     Set_Cursor(1,1)
+    Send_Constant_String (#param_message)
+    Set_Cursor(2,1)
     Send_Constant_String (#soak_temp_message)
 StateA:
     mov a, STATE_VAR_2
@@ -596,26 +642,29 @@ StateA:
     cjne a, #0, StateBInit
     lcall Check_Select_Button_Press
     jb SELECT_BUTTON_FLAG, StateADone
+
+    Set_Cursor(2,12)
+    Display_BCD(soak_temp_set+1)
+    Display_BCD(soak_temp_set+0)
     
     ;lcall Keypad
     ;jnc StateA
 
     ;lcall Shift_Digits_Left
-    
-    Set_Cursor(1,12)
-    Display_BCD(bcd+1)
-    Display_BCD(bcd+0)
+
+    ;mov soak_temp_set+0, bcd+0
+    ;mov soak_temp_set+1, bcd+1
 
     sjmp StateA
+    
 StateADone:
-    mov soak_temp_set+0, bcd+0
-    mov soak_temp_set+1, bcd+1
+    lcall BeepSpeaker
     inc STATE_VAR_2
     clr SELECT_BUTTON_FLAG
     sjmp StateA
 
 StateBInit:
-    Set_Cursor(1,1)
+    Set_Cursor(2,1)
     Send_Constant_String(#soak_time_message)
 StateB:
     mov a, STATE_VAR_2
@@ -623,26 +672,29 @@ StateB:
     cjne a, #1, StateCInit
     lcall Check_Select_Button_Press
     jb SELECT_BUTTON_FLAG, StateBDone
+
+    Set_Cursor(2,12)
+    ;Display_BCD(soak_time_set+1)
+    Display_BCD(soak_time_set+0)
     
     ;lcall Keypad
     ;jnc StateB
 
     ;lcall Shift_Digits_Left
-    
-    Set_Cursor(1,12)
-    Display_BCD(bcd+1)
-    Display_BCD(bcd+0)
+
+    ;mov soak_time_set+0, bcd+0
+    ;mov soak_time_set+1, bcd+1
     
     sjmp StateB
+    
 StateBDone:
-    mov soak_time_set+0, bcd+0
-    mov soak_time_set+1, bcd+1
+    lcall BeepSpeaker
     inc STATE_VAR_2
     clr SELECT_BUTTON_FLAG
     sjmp StateB
 
 StateCInit:
-    Set_Cursor(1,1)
+    Set_Cursor(2,1)
     send_constant_string(#reflow_temp_message)
 StateC:
     mov a, STATE_VAR_2
@@ -655,21 +707,24 @@ StateC:
     ;jnc StateC
 
     ;lcall Shift_Digits_Left
+
+    ;mov reflow_temp_set+0, bcd+0
+    ;mov reflow_temp_set+1, bcd+1
     
-    Set_Cursor(1,14)
-    Display_BCD(bcd+1)
-    Display_BCD(bcd+0)
+    Set_Cursor(2,12)
+    Display_BCD(reflow_temp_set+1)
+    Display_BCD(reflow_temp_set+0)
 
     sjmp StateC
+    
 StateCDone:
-    mov reflow_temp_set+0, bcd+0
-    mov reflow_temp_set+1, bcd+1
+    lcall BeepSpeaker
     inc STATE_VAR_2
     clr SELECT_BUTTON_FLAG
     sjmp StateC
 
 StateDInit:
-    Set_Cursor(1,1)
+    Set_Cursor(2,1)
     send_constant_string(#reflow_time_message)
 StateD:
     mov a, STATE_VAR_2
@@ -682,17 +737,18 @@ StateD:
     ;jnc StateD
 
     ;lcall Shift_Digits_Left
+
+    ;mov reflow_time_set+0, bcd+0
+    ;mov reflow_time_set+1, bcd+1
     
-    Set_Cursor(1,14)
-    Display_BCD(bcd+1)
-    Display_BCD(bcd+0)
-    Display_BCD(reflow_time_set)
+    Set_Cursor(2,12)
+    ;Display_BCD(reflow_time_set+1)
+    Display_BCD(reflow_time_set+0)
 
     sjmp StateD
 
 StateDDone:
-    mov reflow_time_set+0, bcd+0
-    mov reflow_time_set+1, bcd+1
+    lcall BeepSpeaker
     inc STATE_VAR_2
     clr SELECT_BUTTON_FLAG
     sjmp StateD
@@ -700,6 +756,8 @@ StateDDone:
 ReadyStateInit:
     Set_Cursor(1,1)
     Send_Constant_String(#ready_message)
+    Set_Cursor(2,1)
+    Send_Constant_String(#blank_row)
     
 ReadyState:
     ;jnb seconds_flag, skipSerial_0 *** not too sure what this does
@@ -708,6 +766,9 @@ skipSerial_0:
     jb START_BUTTON, ReadyState
     lcall wait50ms
     jb START_BUTTON, ReadyState
+
+    Set_Cursor(1,1)
+    Send_Constant_String (#state0_message)
 
     setb START_FLAG
     sjmp State0
@@ -733,6 +794,9 @@ State0_StopReflow:
 ljmp StopReflow
 
 State0Done:
+    lcall BeepSpeaker
+    Set_Cursor(1,1)
+    Send_Constant_String (#state1_message)
     inc STATE_VAR_1
     mov POWER, #100
     mov TIME, #0
@@ -760,6 +824,9 @@ CheckCarryState1:
 LessThanState1:
     sjmp State1
 GreaterThanState1:
+    lcall BeepSpeaker
+    Set_Cursor(1,1)
+    Send_Constant_String (#state2_message)
     inc STATE_VAR_1
     mov POWER, #20
     sjmp State1
@@ -794,6 +861,9 @@ CheckAbortCondition:
 CheckAbortCarry:
     jc State2_StopOven          
     ; TEMP > 50, definitely good to proceed
+    lcall BeepSpeaker
+    Set_Cursor(1,1)
+    Send_Constant_String (#state3_message)
     inc STATE_VAR_1
     mov POWER, #100
     mov TIME, #0
@@ -804,10 +874,13 @@ CheckCarryState2:
 LessThanState2:
     sjmp State2
 GreaterThanState2:
+    lcall BeepSpeaker
+    Set_Cursor(1,1)
+    Send_Constant_String (#state3_message)
     inc STATE_VAR_1
     mov POWER, #100
     mov TIME, #0
-    sjmp State2
+    ljmp State2
 State3:
     jb RESET_BUTTON, State3_ResetToMain
     jb STOP_BUTTON, State3_StopReflow
@@ -831,24 +904,34 @@ CheckCarryState3:
 LessThanState3:
     sjmp State3
 GreaterThanState3:
+    lcall BeepSpeaker
+    Set_Cursor(1,1)
+    Send_Constant_String (#state4_message)
     inc STATE_VAR_1
     mov POWER, #20
     sjmp State3
 State4:
-    jb RESET_BUTTON, ResetToMain
-    jb STOP_BUTTON, StopReflow
+    jb RESET_BUTTON, ResetToMainState4
+    jb STOP_BUTTON, StopReflowState4
     mov a, STATE_VAR_1
     cjne a, #4, State5
     mov R0, #45 ; 45 Seconds
     mov a, TIME
     cjne a, #0x00, CheckCarryState4
     sjmp State4
+StopReflowState4:
+    ljmp StopReflow
+ResetToMainState4:
+    ljmp ResetToMain
 CheckCarryState4:
     jc LessThanState4
     sjmp GreaterThanState4
 LessThanState4:
     sjmp State4 
 GreaterThanState4:
+    lcall BeepSpeaker
+    Set_Cursor(1,1)
+    Send_Constant_String (#state5_message)
     inc STATE_VAR_1
     mov POWER, #0
     sjmp State4
@@ -865,6 +948,9 @@ State5:
     sjmp State5
     
 State5toState0:
+    lcall BeepSpeaker
+    Set_Cursor(1,1)
+    Send_Constant_String (#state0_message)
     ljmp State0
 
 CheckCarryState5:
@@ -886,6 +972,8 @@ StopReflow:
     ljmp MAIN
 
 STOPOVEN:
+    Set_Cursor(1,1)
+    Send_Constant_String (#abortcondition_message)
     jb RESET_BUTTON, RestartProcess
     sjmp STOPOVEN ; Infinite loop to stop the oven if abort condition is met
 
