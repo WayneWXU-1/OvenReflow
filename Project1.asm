@@ -71,7 +71,8 @@ POWER:           DS 2
 DEGREES60:       DS 2
 DEGREES150:      DS 2
 DEGREES220:      DS 2
-TARGET:           DS 2
+TARGET:          DS 2
+TARGET_TIME:     DS 2
 ;*** Variables ***
 SOAK_TEMP_set:       ds 2
 SOAK_TIME_set:       ds 2
@@ -150,7 +151,10 @@ reflow_message:         db 'TIME:XXXTEMP:XXX', 0
 reflowdone_message:     db 'Reflow Complete!', 0
 restart_message:        db 'RST 2 Bake Again', 0
 
-stop_message:           db 'Reflow Stopped!  '
+stop_message:           db 'Reflow Stopped! ', 0
+
+TimeLabel: db 'T','I','M','E',':', 0
+TempLabel: db 'T','E','M','P',':', 0
 
 $NOLIST
 $include(LCD_4bit_DE10Lite_no_RW.inc) ; A library of LCD related functions and utility macros
@@ -1166,6 +1170,8 @@ UnbeepSpeaker:
     clr TR0
     ret
 
+;=============================================;
+
 FSM2_Temp_Time_display:
     ;print time
     Set_Cursor(2,1)
@@ -1859,57 +1865,33 @@ ljmp MAIN
 
 StateD_R:
 
-ljmp Re
+ljmp ReadyStateInit
 
-
-
-
-
-    Inc_Reflow_Time:
-
-        
+    Inc_Reflow_Time:        
 
         clr PARAM_BUTTON_FLAG
 
-
-
         mov a, reflow_time_set
 
-
-
         jb UPDOWN, Dec_Reflow_Time
-
         jb TENS, Inc_Reflow_Time_Tens
-
-
 
         add a, #1
 
         sjmp Reflow_Time_Tens_Done
 
-
-
     Inc_Reflow_Time_Tens:
 
         add a, #10
-
         sjmp Reflow_Time_Tens_Done
-
-
 
     Dec_Reflow_Time:
 
         jb TENS, Dec_Reflow_Time_Tens
-
-        
-
         clr c
 
         subb a, #1
-
         sjmp Reflow_Time_Tens_Done
-
-
 
     Dec_Reflow_Time_Tens:
 
@@ -2003,9 +1985,6 @@ ljmp StopReflow
 
 State0Done:
     lcall BeepSpeaker
-    Set_Cursor(1,1)
-    Send_Constant_String (#state1_message)
-    lcall FSM2_Temp_Time_display
     inc STATE_VAR_1
     mov POWER, #100
     mov TIME, #0
@@ -2015,7 +1994,9 @@ State1:
     jnb STOP_BUTTON, State1_StopReflow
     mov a, STATE_VAR_1
     cjne a, #1, State2
-
+    Set_Cursor(1,1)
+    Send_Constant_String (#state1_message)
+    lcall FSM2_Temp_Time_display
     lcall CheckAbortCondition ;Must abort if 50 degrees isn't reached in first 60 seconds
 
     mov TARGET, SOAK_TEMP_set
@@ -2038,9 +2019,6 @@ LessThanState1:
     sjmp State1
 GreaterThanState1:
     lcall BeepSpeaker
-    Set_Cursor(1,1)
-    Send_Constant_String (#state2_message)
-    lcall FSM2_Temp_Time_display
     inc STATE_VAR_1
     mov POWER, #20
     mov TIME, #0
@@ -2050,6 +2028,9 @@ State2:
     jnb STOP_BUTTON, State2_StopReflow
     mov a, STATE_VAR_1
     cjne a, #2, State2_State3
+    Set_Cursor(1,1)
+    Send_Constant_String (#state2_message)
+    lcall FSM2_Temp_Time_display
     mov TARGET_TIME, SOAK_TIME_set
     mov a, TIME
     clr c
@@ -2091,9 +2072,6 @@ LessThanState2:
     sjmp State2
 GreaterThanState2:
     lcall BeepSpeaker
-    Set_Cursor(1,1)
-    Send_Constant_String (#state3_message)
-    lcall FSM2_Temp_Time_display
     inc STATE_VAR_1
     mov POWER, #100
     ljmp State2
@@ -2102,6 +2080,9 @@ State3:
     jnb STOP_BUTTON, State3_StopReflow
     mov a, STATE_VAR_1
     cjne a, #3, State4
+    Set_Cursor(1,1)
+    Send_Constant_String (#state3_message)
+    lcall FSM2_Temp_Time_display
     mov TARGET, reflow_temp_set
     mov a, TEMP
     clr c
@@ -2122,9 +2103,6 @@ LessThanState3:
     sjmp State3
 GreaterThanState3:
     lcall BeepSpeaker
-    Set_Cursor(1,1)
-    Send_Constant_String (#state4_message)
-    lcall FSM2_Temp_Time_display
     inc STATE_VAR_1
     mov POWER, #20
     mov TIME, #0
@@ -2134,6 +2112,9 @@ State4:
     jnb STOP_BUTTON, StopReflowState4
     mov a, STATE_VAR_1
     cjne a, #4, State5
+    Set_Cursor(1,1)
+    Send_Constant_String (#state4_message)
+    lcall FSM2_Temp_Time_display
     mov TARGET_TIME, REFLOW_TIME_set
     mov a, TIME
     clr c
@@ -2151,9 +2132,6 @@ LessThanState4:
     sjmp State4 
 GreaterThanState4:
     lcall BeepSpeaker
-    Set_Cursor(1,1)
-    Send_Constant_String (#state5_message)
-    lcall FSM2_Temp_Time_display
     inc STATE_VAR_1
     mov POWER, #0
     sjmp State4
@@ -2165,6 +2143,9 @@ State5:
     cjne a, #5, State5toDone
     mov TARGET, DEGREES60
     mov a, TEMP
+    Set_Cursor(1,1)
+    Send_Constant_String (#state5_message)
+    lcall FSM2_Temp_Time_display
     cjne a, #60, CheckCarryState5
     sjmp State5
     
@@ -2204,10 +2185,15 @@ STOPOVEN:
     Send_Constant_String (#abortcondition_message)
     Set_Cursor(2,1)
     Send_Constant_String (#restart_message)
-    mov R0, #10
+    mov R4, #10
 STOPOVENSpeakerLoop:
     lcall BeepSpeaker
-    djnz R0, STOPOVENSpeakerLoop
+    lcall Wait50ms
+    lcall Wait50ms
+    lcall Wait50ms
+    lcall Wait50ms
+    lcall Wait50ms
+    djnz R4, STOPOVENSpeakerLoop
 ForeverStop:
     jnb RESET_BUTTON, RestartProcess
     sjmp ForeverStop ; Infinite loop to stop the oven if abort condition is met
@@ -2218,11 +2204,18 @@ RestartProcess:
 ReflowDone:
     Set_Cursor(2,1)
     Send_Constant_String (#restart_message)
-    mov R0, #5
+    mov R4, #5
 SpeakerLoop:
     lcall BeepSpeaker
-    djnz R0, SpeakerLoop
+    lcall Wait50ms
+    lcall Wait50ms
+    lcall Wait50ms
+    lcall Wait50ms
+    lcall Wait50ms
+    djnz R4, SpeakerLoop
 Forever:
-    jnb RESET_BUTTON, ResetToMain
+    jnb RESET_BUTTON, ForeverToMain
     sjmp Forever
+ForeverToMain:
+	ljmp ResetToMain
 END
