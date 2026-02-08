@@ -29,7 +29,7 @@ TENS          equ SWA.1
 
 ; Reset vector
 org 0x0000
-    ljmp main
+    ljmp MAIN
 
 ; External interrupt 0 vector (not used in this code)
 org 0x0003
@@ -310,6 +310,8 @@ Inc_Done:
 	cjne a, #high(1000), Timer2_ISR_Midpoint
     
     
+    
+    
 	mov ADC_C, #00000000b
 	
 
@@ -428,623 +430,344 @@ Wait50ms_L1:
 ; **************************** KEYPAD *******************************
 
 myLUT:
-
     DB 0xC0, 0xF9, 0xA4, 0xB0, 0x99        ; 0 TO 4
-
     DB 0x92, 0x82, 0xF8, 0x80, 0x90        ; 4 TO 9
-
     DB 0x88, 0x83, 0xC6, 0xA1, 0x86, 0x8E  ; A to F
 
-
-
 showBCD MAC
-
 	; Display LSD
-
     mov A, %0
-
     anl a, #0fh
-
     movc A, @A+dptr
-
     mov %1, A
 
 	; Display MSD
-
     mov A, %0
-
     swap a
-
     anl a, #0fh
-
     movc A, @A+dptr
-
     mov %2, A
-
 ENDMAC
 
-
-
 Display:
-
 	mov dptr, #myLUT
-
-	
-
 	$MESSAGE TIP: If digits 10, 9, 8, and 7 are not zero, LEDR7: on
 
-	
-
 	mov a, bcd+3
-
 	orl a, bcd+4
-
 	jz Display_L1
-
 	setb LEDRA.7 ; Non-zero digits alert
-
 	sjmp Display_L2
 
 Display_L1:
-
 	clr LEDRA.7
 
 Display_L2:
-
-
-
 	$MESSAGE TIP: Pressing KEY3, displays the most significant digits of the 10-digit number
 
-	
-
 	jnb key.3, Display_high_digits
-
 	showBCD(bcd+0, HEX0, HEX1)
-
 	showBCD(bcd+1, HEX2, HEX3)
-
 	showBCD(bcd+2, HEX4, HEX5)
 
 	sjmp Display_end
 
-
-
 Display_high_digits:
-
 	showBCD(bcd+3, HEX0, HEX1)
-
 	showBCD(bcd+4, HEX2, HEX3)
-
 	mov HEX4, #0xff	
-
 	mov HEX5, #0xff	
 
-	
-
 Display_end:
-
     ret
-
 
 
 MYRLC MAC
-
 	mov a, %0
-
 	rlc a
-
 	mov %0, a
-
 ENDMAC
 
-
-
 Shift_Digits_Left:
-
 	mov R0, #4 ; shift left four bits
-
-
+    cjne a, #3, Shift_Digits_Left_L0
+ret
 
     mov a, STATE_VAR_2
-
-
-
     cjne a, #0, KCheck_StateC
 
-
-
     mov a, keypad_digit_count
-
     cjne a, #3, Shift_Digits_Left_L0
 
     ret
-
-
 
 KCheck_StateC:
-
     cjne a, #2, KCheck_Time_States
-
-
-
     mov a, keypad_digit_count
-
     cjne a, #3, Shift_Digits_Left_L0
-
     ret
-
-
 
 KCheck_Time_States:
-
-
-
     mov a, keypad_digit_count
-
     cjne a, #2, Shift_Digits_Left_L0
-
     ret
 
-
-
 Shift_Digits_Left_L0:
-
 	clr c
-
 	MYRLC(bcd+0)
-
 	MYRLC(bcd+1)
-
 	MYRLC(bcd+2)
-
 	MYRLC(bcd+3)
-
 	MYRLC(bcd+4)
 
 	djnz R0, Shift_Digits_Left_L0
-
 	; R7 has the new bcd digit	
-
 	mov a, R7
-
 	orl a, bcd+0
-
 	mov bcd+0, a
 
-
-
     inc keypad_digit_count
-
-
-
-	ret
-
-
-
+    setb c
+    
 Shift_Digits_left_exit:
-
 	ret
 
 	
-
 MYRRC MAC
-
 	mov a, %0
-
 	rrc a
-
 	mov %0, a
-
 ENDMAC
 
-
-
 Shift_Digits_Right:
-
 	mov R0, #4 ; shift right four bits
 
-
-
 Shift_Digits_Right_L0:
-
 	clr c
-
 	MYRRC(bcd+4)
-
 	MYRRC(bcd+3)
-
 	MYRRC(bcd+2)
-
 	MYRRC(bcd+1)
-
 	MYRRC(bcd+0)
 
 	djnz R0, Shift_Digits_Right_L0
 
-
-
     mov a, keypad_digit_count
-
     jz Shift_Digits_Right_Ret
-
-
-
     dec keypad_digit_count
 
-
+    setb c
 
 Shift_Digits_Right_Ret:
-
 	ret
 
 
-
 Wait25ms:
-
 ;33.33MHz, 1 clk per cycle: 0.03us
-
 	mov R0, #15
-
 LL3: mov R1, #74
-
 LL2: mov R2, #250
-
 LL1: djnz R2, LL1 ;3*250*0.03us=22.5us
-
-    djnz R1, LL2 ;74*22.5us=1.665ms
-
-    djnz R0, LL3 ;1.665ms*15=25ms
+     djnz R1, LL2 ;74*22.5us=1.665ms
+     djnz R0, LL3 ;1.665ms*15=25ms
 
     ret
 
 
 
 CHECK_COLUMN MAC
-
 	jb %0, CHECK_COL_%M
-
 	mov R7, %1
-
 	jnb %0, $ ; wait for key release
-
 	setb c
-
 	ret
-
 CHECK_COL_%M:
-
 ENDMAC
 
-
-
 Configure_Keypad_Pins:
-
 	; Configure the row pins as output and the column pins as inputs
-
 	orl P1MOD, #0b_01010100 ; P1.6, P1.4, P1.2 output
-
 	orl P2MOD, #0b_00000001 ; P2.0 output
-
 	anl P2MOD, #0b_10101011 ; P2.6, P2.4, P2.2 input
-
 	anl P3MOD, #0b_11111110 ; P3.0 input
-
 	ret
 
-
-
-
-
 ; This subroutine scans a 4x4 keypad.  If a key is pressed sets the carry
-
 ; to one and returns the key code in register R7.
-
 ; It works with both a default keypad or a modified keypad with the labels
-
 ; rotated 90 deg ccw.  The type of keypad is determined by SW0, which is bit SWA.0
 
 Keypad:
-
 	; First check the backspace/correction pushbutton.  We use KEY1 for this function.
-
 	$MESSAGE TIP: KEY1 is the erase key
 
 	jb STOP_BUTTON, keypad_L0
-
 	lcall Wait25ms ; debounce
-
 	jb STOP_BUTTON, keypad_L0
 
 	jnb STOP_BUTTON, $ ; The key was pressed, wait for release
-
 	lcall Shift_Digits_Right
-
+    lcall bcd2hex
+    mov soak_temp_set+0, x+0
+    mov soak_temp_set+1, x+1
 	clr c
-
 	ret
-
-	
 
 keypad_L0:
 
 	; Make all the rows zero.  If any column is zero then a key is pressed.
-
 	clr ROW1
-
 	clr ROW2
-
 	clr ROW3
-
 	clr ROW4
 
 	mov c, COL1
-
 	anl c, COL2
-
 	anl c, COL3
-
 	anl c, COL4
 
 	jnc Keypad_Debounce
-
 	clr c
-
 	ret
 
-		
 
 Keypad_Debounce:
-
 	; A key maybe pressed.  Wait and check again to discard bounces.
-
 	lcall Wait25ms ; debounce
 
 	mov c, COL1
-
 	anl c, COL2
-
 	anl c, COL3
-
 	anl c, COL4
 
 	jnc Keypad_Key_Code
-
 	clr c
-
 	ret
-
 	
 
 Keypad_Key_Code:	
-
 	; A key is pressed.  Find out which one by checking each possible column and row combination.
 
-
-
 	setb ROW1
-
 	setb ROW2
-
 	setb ROW3
-
 	setb ROW4
-
-	
 
 	; This check section is for an un-modified keypad
 
 keypad_default:	
 
 	; Check row 1	
-
 	clr ROW1
-
 	CHECK_COLUMN(COL1, #01H)
-
 	CHECK_COLUMN(COL2, #02H)
-
 	CHECK_COLUMN(COL3, #03H)
-
 	CHECK_COLUMN(COL4, #0AH)
 
 	setb ROW1
 
-
-
 	; Check row 2	
 
 	clr ROW2
-
 	CHECK_COLUMN(COL1, #04H)
-
 	CHECK_COLUMN(COL2, #05H)
-
 	CHECK_COLUMN(COL3, #06H)
-
 	CHECK_COLUMN(COL4, #0BH)
 
 	setb ROW2
 
-
-
 	; Check row 3	
 
 	clr ROW3
-
 	CHECK_COLUMN(COL1, #07H)
-
 	CHECK_COLUMN(COL2, #08H)
-
 	CHECK_COLUMN(COL3, #09H)
-
 	CHECK_COLUMN(COL4, #0CH)
 
 	setb ROW3
 
-
-
 	; Check row 4	
 
 	clr ROW4
-
 	CHECK_COLUMN(COL1, #0EH)
-
 	CHECK_COLUMN(COL2, #00H)
-
 	CHECK_COLUMN(COL3, #0FH)
-
 	CHECK_COLUMN(COL4, #0DH)
 
 	setb ROW4
-
-
 
 	clr c
 
 	ret
 
 	
-
-
-
-
-
 ; Look-up table for the 7-seg displays. (Segments are turn on with zero) 
-
 T_7seg:
-
     DB 0xC0, 0xF9, 0xA4, 0xB0, 0x99        ; 0 TO 4
-
     DB 0x92, 0x82, 0xF8, 0x80, 0x90        ; 4 TO 9
-
     DB 0x88, 0x83, 0xC6, 0xA1, 0x86, 0x8E  ; A to F
 
 
-
 ; Displays a BCD number in HEX1-HEX0
-
 Display_BCD_7_Seg:
-
-
-
     push acc
-
     push psw
 
-	
-
 	mov x+0, TEMP+0
-
 	mov x+1, TEMP+1
-
 	lcall hex2bcd
 
-	
-
 	mov dptr, #T_7seg
-
-
-
     mov a, bcd+1
-
     anl a, #0FH
-
     movc a, @a+dptr
-
     mov HEX2, a
 
-
-
 	mov a, bcd
-
 	swap a
-
 	anl a, #0FH
-
 	movc a, @a+dptr
-
 	mov HEX1, a
 
-	
-
 	mov a, bcd
-
 	anl a, #0FH
-
 	movc a, @a+dptr
-
 	mov HEX0, a
 
-
-
     pop psw
-
     pop acc
-
-	
 
 	ret
 
 
-
-
-
 Check_Select_Button_Press:
-
-
-
     jb SELECT_BUTTON, Not_Pressed
-
     lcall Wait50ms
-
     jb SELECT_BUTTON, Not_Pressed
-
-
 
     setb SELECT_BUTTON_FLAG
 
-
-
     jnb SELECT_BUTTON, $
 
-
-
     Not_Pressed:
-
         ret
 
 
-
-
-
 Check_Param_Button_Press:
-
-
-
     jb PARAM_BUTTON, Not_Pressed_2
-
     lcall Wait50ms
-
     jb PARAM_BUTTON, Not_Pressed_2
-
-
 
     setb PARAM_BUTTON_FLAG
 
-
-
     jnb PARAM_BUTTON, $
 
-
-
     Not_Pressed_2:
-
         ret
 
     ;---------------READ KEYPAD-------------------;
 
     ;A Macro essentially works like CHECK_COL(COL#, Literal value coloumn represents)
-
     ;If the column is pressed, R7 will contain the column number (1-4)
     
 
@@ -1187,7 +910,7 @@ FSM2_Temp_Time_display:
     Display_BCD(bcd+1)
     Display_BCD(bcd+0)
     ;print temp
-    Set_Cursor(2,11)
+    Set_Cursor(2,10)
     Send_Constant_String(#TempLabel)
 
     mov x+0, TEMP+0
@@ -1220,11 +943,8 @@ MAIN:
     clr KEYPAD_FLAG
     clr p0.0 ; Make sure oven is off to start
     clr TR0 ; Start speaker off
+    clr a
 
-    mov soak_temp_set, #150
-    mov soak_time_set, #60
-    mov reflow_temp_set, #220
-    mov reflow_time_set, #30
 
     mov STATE_VAR_1, #0x0000
     mov STATE_VAR_2, #0x0000
@@ -1237,656 +957,370 @@ MAIN:
     mov TARGET,       #0
 
     mov bcd, #0x0000
+    mov x+0, #0x0000
+    mov x+1, #0x0000
+    mov x+2, #0x0000
+    mov x+3, #0x0000
+
+    mov soak_temp_set+0, #150
+    mov soak_temp_set+1, a
+
+    mov soak_time_set+0, #60
+    mov soak_time_set+1, a
+
+    mov reflow_temp_set+0, #220
+    mov reflow_temp_set+1, a
+
+    mov reflow_time_set+0, #30
+    mov reflow_time_set+1, a
+
 
 MAIN_LOOP:
 
 PARAM_FSM:
 
-
 ; **************************** FSM for selecting parameters *************************
 
 ; 4 main states ->  A: select soak temp
-
 ;                   B: select soak time
-
 ;                   C: select reflow temp
-
 ;                   D: select reflow time
-
-;
-
 ; move to other FSM when start button turns on start flag
 
-
-
-
-
-
-
-
-
 StateAInit:
-
     Set_Cursor(1,1)
-
     Send_Constant_String (#param_message)
-
     Set_Cursor(2,1)
-
     Send_Constant_String (#soak_temp_message)
 
+    clr KEYPAD_FLAG
+    mov keypad_digit_count, #0
+
 StateA:
-
     jnb RESET_BUTTON, StateA_ResetToMain
-
-
-
     mov a, STATE_VAR_2
-
-
-
     cjne a, #0, StateA_B
 
     lcall Check_Select_Button_Press
-
-    jb SELECT_BUTTON_FLAG, StateADone
-
-
+    jb SELECT_BUTTON_FLAG, StateAtoDone
 
     mov x+0, soak_temp_set+0
-
     mov x+1, soak_temp_set+1
-
     mov x+2, #0
-
     mov x+3, #0
-
     lcall hex2bcd
 
-
-
     Set_Cursor(2,12)
-
     Display_BCD(bcd+1)
-
     Display_BCD(bcd+0)
 
-
-
     lcall Check_Param_Button_Press
-
     jb PARAM_BUTTON_FLAG, Inc_Soak_Temp
+    sjmp StateA_Keypad
 
-    
+StateA_ResetToMain:
+ljmp MAIN   
+
+StateA_B:
+ljmp StateBInit
+
+StateAtoDone:
+ljmp StateADone
 
 StateA_Keypad:
-
-
-
     lcall Keypad
-
     jnc StateA
 
-
-
     jb KEYPAD_FLAG, StateA_Keypad_Continue
-
     setb KEYPAD_FLAG
 
-
-
     mov a, #0
-
-    mov a, bcd+0
-
-    mov a, bcd+1
-
-    mov a, bcd+2
-
-    mov a, bcd+3
-
-
+    mov bcd+0, a
+    mov bcd+1, a
+    mov bcd+2, a
+    mov bcd+3, a
 
 StateA_Keypad_Continue:
-
-    
-
     lcall Shift_Digits_Left
+    jnc StateA
 
     lcall bcd2hex
 
-
-
     mov soak_temp_set+0, x+0
-
     mov soak_temp_set+1, x+1
 
+    mov x+0, soak_temp_set+0
+    mov x+1, soak_temp_set+1
+    mov x+2, #0
+    mov x+3, #0
+    lcall hex2bcd
 
-
-    sjmp StateA
-
-    
-
-StateA_ResetToMain:
-
-ljmp MAIN   
-
-
-
-StateA_B:
-
-ljmp StateBInit
-
-
-
-    Inc_Soak_Temp:
-
-        
-
-        clr PARAM_BUTTON_FLAG
-
-
-
-        mov a, soak_temp_set
-
-
-
-        jb UPDOWN, Dec_Soak_Temp
-
-        jb TENS, Inc_Soak_Temp_Tens
-
-
-
-        add a, #1
-
-        sjmp Soak_Temp_Tens_Done
-
-
-
-    Inc_Soak_Temp_Tens:
-
-        add a, #10
-
-        sjmp Soak_Temp_Tens_Done
-
-
-
-    Dec_Soak_Temp:
-
-        jb TENS, Dec_Soak_Temp_Tens
-
-        
-
-        clr c
-
-        subb a, #1
-
-        sjmp Soak_Temp_Tens_Done
-
-
-
-    Dec_Soak_Temp_Tens:
-
-        clr c  
-
-        subb a, #10
-
-        sjmp Soak_Temp_Tens_Done
-
-
-
-    Soak_Temp_Tens_Done:
-
-        mov soak_temp_set, a
-
-        ljmp StateA
-
-    
-
-StateADone:
-
-    lcall BeepSpeaker
-
-    inc STATE_VAR_2
-
-    clr SELECT_BUTTON_FLAG
-
-    clr KEYPAD_FLAG
-
-    mov a, #0
-
-    mov keypad_digit_count, a
+    Set_Cursor(2,12)
+    Display_BCD(bcd+1)
+    Display_BCD(bcd+0)
 
     ljmp StateA
 
 
+    Inc_Soak_Temp:
+        clr PARAM_BUTTON_FLAG
 
+        mov a, soak_temp_set
 
+        jb UPDOWN, Dec_Soak_Temp
+        jb TENS, Inc_Soak_Temp_Tens
 
+        add a, #1
+        sjmp Soak_Temp_Tens_Done
+
+    Inc_Soak_Temp_Tens:
+        add a, #10
+        sjmp Soak_Temp_Tens_Done
+
+    Dec_Soak_Temp:
+        jb TENS, Dec_Soak_Temp_Tens
+
+        clr c
+        subb a, #1
+        sjmp Soak_Temp_Tens_Done
+
+    Dec_Soak_Temp_Tens:
+        clr c  
+        subb a, #10
+        sjmp Soak_Temp_Tens_Done
+
+    Soak_Temp_Tens_Done:
+        mov soak_temp_set, a
+        ljmp StateA
+
+StateADone:
+    lcall BeepSpeaker
+    inc STATE_VAR_2
+    clr SELECT_BUTTON_FLAG
+    clr KEYPAD_FLAG
+    mov a, #0
+    mov keypad_digit_count, a
+    ljmp StateA
 
 
 StateBInit:
-
     Set_Cursor(2,1)
-
     Send_Constant_String(#soak_time_message)
 
 StateB:
-
     jnb RESET_BUTTON, StateB_ResetToMain
-
-
-
     mov a, STATE_VAR_2
-
-
-
     cjne a, #1, StateCInit
 
     lcall Check_Select_Button_Press
-
     jb SELECT_BUTTON_FLAG, StateBDone
 
-
-
     mov x+0, soak_time_set+0
-
     mov x+1, #0
-
     mov x+2, #0
-
     mov x+3, #0
-
     lcall hex2bcd
 
-
-
     Set_Cursor(2,12)
-
     Display_BCD(bcd+0)
 
-
-
     lcall Check_Param_Button_Press
-
     jb PARAM_BUTTON_FLAG, Inc_Soak_Time
 
-    
-
 StateB_Keypad:
-
-
-
     ;lcall Keypad
-
     ;jnc StateB
-
-
 
     ;lcall Shift_Digits_Left
 
-
-
     ;mov soak_time_set+0, bcd+0
-
     ;mov soak_time_set+1, bcd+1
-
-    
 
     sjmp StateB
 
-
-
 StateB_ResetToMain:
-
 ljmp MAIN
 
-
-
 StateB_C:
-
 ljmp StateCInit
 
 
-
     Inc_Soak_Time:
-
-        
-
         clr PARAM_BUTTON_FLAG
-
-
 
         mov a, soak_time_set
 
-
-
         jb UPDOWN, Dec_Soak_Time
-
         jb TENS, Inc_Soak_Time_Tens
 
-
-
         add a, #1
-
         sjmp Soak_Time_Tens_Done
-
-
 
     Inc_Soak_Time_Tens:
-
         add a, #10
-
         sjmp Soak_Time_Tens_Done
 
-
-
     Dec_Soak_Time:
-
         jb TENS, Dec_Soak_Time_Tens
-
-        
-
         clr c
 
         subb a, #1
-
         sjmp Soak_Time_Tens_Done
 
-
-
     Dec_Soak_Time_Tens:
-
         clr c
 
         subb a, #10
-
         sjmp Soak_Time_Tens_Done
 
-
-
     Soak_Time_Tens_Done:
-
         mov soak_time_set, a
-
         sjmp StateB
 
-    
-
 StateBDone:
-
     lcall BeepSpeaker
-
     inc STATE_VAR_2
-
     clr SELECT_BUTTON_FLAG
-
     sjmp StateB
 
 
-
 StateCInit:
-
     Set_Cursor(2,1)
-
     send_constant_string(#reflow_temp_message)
-
 StateC:
-
     jnb RESET_BUTTON, StateC_ResetToMain
-
-
-
     mov a, STATE_VAR_2
-
-
-
     cjne a, #2, StateDInit
 
     lcall Check_Select_Button_Press
-
     jb SELECT_BUTTON_FLAG, StateCDone
 
-
-
     mov x+0, reflow_temp_set+0
-
     mov x+1, reflow_temp_set+1
-
-    mov x+2, #0
-
-    mov x+3, #0
+    mov x+2, #0x0000
+    mov x+3, #0x0000
 
     lcall hex2bcd
 
-
-
     Set_Cursor(2,12)
-
     Display_BCD(bcd+1)
-
     Display_BCD(bcd+0)
 
-
-
     lcall Check_Param_Button_Press
-
     jb PARAM_BUTTON_FLAG, Inc_Reflow_Temp
 
-
-
 StateC_Keypad:
-
-
-
     ;lcall Keypad
-
     ;jnc StateC
-
-
 
     ;lcall Shift_Digits_Left
 
-
-
     ;mov reflow_temp_set+0, bcd+0
-
     ;mov reflow_temp_set+1, bcd+1
-
-
 
     sjmp StateC
 
-
-
 StateC_ResetToMain:
-
 ljmp MAIN
 
-
-
 StateC_D:
-
 ljmp StateDInit
 
 
-
     Inc_Reflow_Temp:
-
-        
-
         clr PARAM_BUTTON_FLAG
-
-
-
         mov a, reflow_temp_set
 
-
-
         jb UPDOWN, Dec_Reflow_Temp
-
         jb TENS, Inc_Reflow_Temp_Tens
 
-
-
         add a, #1
-
         sjmp Reflow_Temp_Tens_Done
-
-
 
     Inc_Reflow_Temp_Tens:
-
         add a, #10
-
         sjmp Reflow_Temp_Tens_Done
-
-
 
     Dec_Reflow_Temp:
-
         jb TENS, Dec_Reflow_Temp_Tens
 
-        
-
         clr c
-
         subb a, #1
-
         sjmp Reflow_Temp_Tens_Done
-
-
 
     Dec_Reflow_Temp_Tens:
-
         clr c
-
         subb a, #10
-
         sjmp Reflow_Temp_Tens_Done
 
-
-
     Reflow_Temp_Tens_Done:
-
         mov reflow_temp_set, a
-
         sjmp StateC
 
-    
-
 StateCDone:
-
     lcall BeepSpeaker
-
     inc STATE_VAR_2
-
     clr SELECT_BUTTON_FLAG
-
     sjmp StateC
 
 
-
 StateDInit:
-
     Set_Cursor(2,1)
-
     send_constant_string(#reflow_time_message)
 
 StateD:
-
     jnb RESET_BUTTON, StateD_ResetToMain
-
-
-
     mov a, STATE_VAR_2
-
-
-
     cjne a, #3, StateD_R
 
     lcall Check_Select_Button_Press
-
     jb SELECT_BUTTON_FLAG, StateDDone
 
-
-
     mov x+0, reflow_time_set+0
-
     mov x+1, #0
-
     mov x+2, #0
-
     mov x+3, #0
-
     lcall hex2bcd
 
-
-
     Set_Cursor(2,12)
-
     Display_BCD(bcd+0)
 
-
-
     lcall Check_Param_Button_Press
-
     jb PARAM_BUTTON_FLAG, Inc_Reflow_Time
 
-
-
 StateD_Keypad:
-
-
-
     ;lcall Keypad 
-
     ;jnc StateD
-
-
 
     ;lcall Shift_Digits_Left
 
-
-
     ;mov reflow_time_set+0, bcd+0
-
     ;mov reflow_time_set+1, bcd+1
-
-
 
     sjmp StateD
 
-
-
 StateD_ResetToMain:
-
 ljmp MAIN
 
 StateD_R:
-
 ljmp ReadyStateInit
 
+
     Inc_Reflow_Time:        
-
         clr PARAM_BUTTON_FLAG
-
         mov a, reflow_time_set
 
         jb UPDOWN, Dec_Reflow_Time
         jb TENS, Inc_Reflow_Time_Tens
 
         add a, #1
-
         sjmp Reflow_Time_Tens_Done
 
     Inc_Reflow_Time_Tens:
-
         add a, #10
         sjmp Reflow_Time_Tens_Done
 
     Dec_Reflow_Time:
-
         jb TENS, Dec_Reflow_Time_Tens
         clr c
 
@@ -1894,73 +1328,42 @@ ljmp ReadyStateInit
         sjmp Reflow_Time_Tens_Done
 
     Dec_Reflow_Time_Tens:
-
         clr c
 
         subb a, #10
-
         sjmp Reflow_Time_Tens_Done
 
-
-
     Reflow_Time_Tens_Done:
-
         mov reflow_time_set, a
-
         sjmp StateD
 
-
-
 StateDDone:
-
     lcall BeepSpeaker
-
     inc STATE_VAR_2
-
     clr SELECT_BUTTON_FLAG
-
     sjmp StateD
 
 
-
 ReadyStateInit:
-
     Set_Cursor(1,1)
-
     Send_Constant_String(#ready_message)
-
     Set_Cursor(2,1)
-
     Send_Constant_String(#blank_row)
 
-    
-
 ReadyState:
-
     ;jnb seconds_flag, skipSerial_0 *** not too sure what this does
 
-
-
 skipSerial_0:
-
     jb START_BUTTON, ReadyState
-
     lcall wait50ms
-
     jb START_BUTTON, ReadyState
-
-
 
     Set_Cursor(1,1)
-
     Send_Constant_String (#state0_message)
 
-
-
     setb START_FLAG
-
+    
     sjmp State0
-
 
 ;==================Reflow Profile FSM==================;
 ;Checklist:
@@ -1968,10 +1371,10 @@ skipSerial_0:
 ; 2. Implement FSM outputs - DONE
 ; 3. Implement reset logic - DONE
 ; 4. Implement abort condition - DONE
-; 5. Implement LCD Feedback for Each State - In Progress
+; 5. Implement LCD Feedback for Each State - Tentatively Done (Still not tested)
 ; 6. Speaker beeps for state transitions - DONE
 ;*Abort condition needs to be in state 1* - FIXED
-; 7. Rewrite State Transitions with SUBB - Not Complete
+; 7. Rewrite State Transitions with SUBB - DONE
 State0:
     jnb STOP_BUTTON, State0_StopReflow
     CLR p0.0 ;oven off
@@ -2136,8 +1539,8 @@ GreaterThanState4:
     mov POWER, #0
     sjmp State4
 State5:
-    jnb RESET_BUTTON, ResetToMain
-    jnb STOP_BUTTON, StopReflow
+    jnb RESET_BUTTON, ResetToMainState5
+    jnb STOP_BUTTON, StopReflowState5
     CLR p0.0 ;turn oven off
     mov a, STATE_VAR_1    
     cjne a, #5, State5toDone
@@ -2148,11 +1551,19 @@ State5:
     lcall FSM2_Temp_Time_display
     cjne a, #60, CheckCarryState5
     sjmp State5
+
+ResetToMainState5:
+    ljmp ResetToMain
+
+StopReflowState5:
+    ljmp StopReflow
     
 State5toDone:
     lcall BeepSpeaker
     Set_Cursor(1,1)
     Send_Constant_String (#reflowdone_message)
+    Set_Cursor(2,1)
+    Send_Constant_String (#restart_message)
     ljmp ReflowDone
 
 CheckCarryState5:
@@ -2161,9 +1572,9 @@ CheckCarryState5:
 LessThanState5:
     mov STATE_VAR_1, #0
     clr START_FLAG
-    sjmp State5
+    ljmp State5
 GreaterThanState5:
-    sjmp State5
+    ljmp State5
 
 ResetToMain:
     mov STATE_VAR_1, #0
@@ -2202,8 +1613,6 @@ RestartProcess:
     ljmp MAIN
     
 ReflowDone:
-    Set_Cursor(2,1)
-    Send_Constant_String (#restart_message)
     mov R4, #5
 SpeakerLoop:
     lcall BeepSpeaker
