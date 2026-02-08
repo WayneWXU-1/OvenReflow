@@ -5,6 +5,7 @@ $MODMAX10
 
 	DSEG at 30H
 bcd:	ds 5
+keypad_digit_count: ds 1
 
 	CSEG
 
@@ -68,12 +69,15 @@ ENDMAC
 Shift_Digits_Left:
 	mov R0, #4 ; shift left four bits
 	; Uncomment the following four lines if you want to limit input to 10 digits
-	mov a, bcd+1
-	anl a, #0xf0
-	jnz Shift_Digits_Left_exit
-	mov a, bcd+2
-	jnz Shift_Digits_Left_exit
-	
+	; mov a, bcd+4
+	; anl a, #0xf0
+	; jz Shift_Digits_Left_L0
+	; ret
+
+	mov a, keypad_digit_count
+	cjne a, #3, Shift_Digits_Left_L0
+	ret
+
 Shift_Digits_Left_L0:
 	clr c
 	MYRLC(bcd+0)
@@ -86,9 +90,9 @@ Shift_Digits_Left_L0:
 	mov a, R7
 	orl a, bcd+0
 	mov bcd+0, a
-	ret
 
-Shift_Digits_left_exit:
+	inc keypad_digit_count
+
 	ret
 	
 MYRRC MAC
@@ -108,6 +112,9 @@ Shift_Digits_Right_L0:
 	MYRRC(bcd+1)
 	MYRRC(bcd+0)
 	djnz R0, Shift_Digits_Right_L0
+
+	dec keypad_digit_count
+
 	ret
 
 Wait25ms:
@@ -154,10 +161,10 @@ COL4 EQU P3.0
 Keypad:
 	; First check the backspace/correction pushbutton.  We use KEY1 for this function.
 	$MESSAGE TIP: KEY1 is the erase key
-	jb KEY.1, keypad_L0
+	jb KEY_1, keypad_L0
 	lcall Wait25ms ; debounce
-	jb KEY.1, keypad_L0
-	jnb KEY.1, $ ; The key was pressed, wait for release
+	jb KEY_1, keypad_L0
+	jnb KEY_1, $ ; The key was pressed, wait for release
 	lcall Shift_Digits_Right
 	clr c
 	ret
@@ -284,6 +291,9 @@ main_code:
 	mov bcd+2, a
 	mov bcd+3, a
 	mov bcd+4, a
+
+	mov keypad_digit_count, a
+
 	lcall Configure_Keypad_Pins
 
 forever:
