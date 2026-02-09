@@ -26,6 +26,8 @@ OVEN_PIN      equ P0.0
 SOUND_OUT     equ P1.5 ; Speaker attached to this pin
 UPDOWN        equ SWA.0
 TENS          equ SWA.1
+RED_LED       equ P1.0
+GREEN_LED     equ P3.1
 
 ; Reset vector
 org 0x0000
@@ -402,9 +404,9 @@ Timer2_ISR_done:
 INITIALIZE:
 
 	mov P0MOD, #10101011b ; P0.0(OVEN_PIN), P0.1, P0.3, P0.5, P0.7(LCD) are outputs. 
-    mov P1MOD, #11110110b ; P1.7, P1.5, P1.1(LCD), 1.2, 1.4, 1.6(ROW) are outputs
+    mov P1MOD, #11110111b ; P1.7, P1.5, P1.1(LCD), 1.2, 1.4, 1.6(ROW) are outputs, P1.0
     mov P2MOD, #00000001b ; output: 2.0(ROW) input: 2.2, 2.4, 2.6(COL)
-    mov P3MOD, #00000000b ; input: 3.0 (COL), 3.2, 3.3, 3.4, 3.5, 3.7 
+    mov P3MOD, #00000010b ; input: 3.0 (COL), 3.2, 3.3, 3.4, 3.5, 3.7 out: 3.1
     ; for keypad, (ROWS as output-1)1.2, 1.4, 1.6, 2.0 - (COLS as input-0) 2.2, 2.4, 2.6, 3.0
     mov ADC_C, #0x00      ; Select ADC Channel 0
     mov ADC_C, #10000000b ; ADC Enable = 1 test******
@@ -598,7 +600,7 @@ Configure_Keypad_Pins:
 
 Keypad:
 	; First check the backspace/correction pushbutton.  We use KEY1 for this function.
-	$MESSAGE TIP: KEY1 is the erase key
+	$MESSAGE TIP: STOP_BUTTON is the erase key
 
 	jb STOP_BUTTON, keypad_L0
 	lcall Wait25ms ; debounce
@@ -607,8 +609,37 @@ Keypad:
 	jnb STOP_BUTTON, $ ; The key was pressed, wait for release
 	lcall Shift_Digits_Right
     lcall bcd2hex
+
+    mov a, STATE_VAR_2
+    cjne a, #0, check_delete_b
+
     mov soak_temp_set+0, x+0
     mov soak_temp_set+1, x+1
+    sjmp delete_done
+
+check_delete_b:
+    cjne a, #1, check_delete_c
+
+    mov soak_time_set+0, x+0
+    mov soak_time_set+1, x+1
+    sjmp delete_done
+
+check_delete_c:
+    cjne a, #2, check_delete_d
+
+    mov reflow_temp_set+0, x+0
+    mov reflow_temp_set+1, x+1
+    sjmp delete_done
+
+check_delete_d:
+    cjne a, #3, delete_done
+
+    mov reflow_time_set+0, x+0
+    mov reflow_time_set+1, x+1
+    sjmp delete_done
+
+delete_done:
+
 	clr c
 	ret
 
@@ -962,6 +993,8 @@ MAIN:
     clr p0.0 ; Make sure oven is off to start
     clr TR0 ; Start speaker off
     clr a
+    clr RED_LED
+    clr GREEN_LED
 
 
     mov STATE_VAR_1, #0x0000
@@ -1153,7 +1186,7 @@ StateB:
 
     lcall Check_Param_Button_Press
     jb PARAM_BUTTON_FLAG, Inc_Soak_Time
-    ljmp StateA_Keypad
+    ljmp StateB_Keypad
 
 StateB_ResetToMain:
 ljmp MAIN
@@ -1278,6 +1311,7 @@ StateC_Keypad:
     jnc StateC
 
     jb KEYPAD_FLAG, StateC_Keypad_Continue
+    setb KEYPAD_FLAG
 
     mov a, #0
     mov bcd+0, a
@@ -1295,14 +1329,14 @@ StateC_Keypad_Continue:
     mov reflow_temp_set+1, x+1
 
     mov x+0, reflow_temp_set+0
-    mov x+1, soak_temp_set+1
+    mov x+1, reflow_temp_set+1
     mov x+2, #0
     mov x+3, #0
     lcall hex2bcd
 
     Set_Cursor(2,12)
     Display_BCD(bcd+1)
-    Display_BCD(bcd+1)
+    Display_BCD(bcd+0)
 
     ljmp StateC
 
@@ -1370,6 +1404,7 @@ StateD:
 
     lcall Check_Param_Button_Press
     jb PARAM_BUTTON_FLAG, Inc_Reflow_Time
+    sjmp StateD_Keypad
 
 StateD_ResetToMain:
 ljmp MAIN
@@ -1692,6 +1727,7 @@ ResetToMain:
     ljmp MAIN
 
 StopReflow:
+    setb RED_LED
     Set_Cursor(1,1)
     Send_Constant_String (#stop_message)
     Set_Cursor(2,1)
@@ -1723,6 +1759,7 @@ RestartProcess:
     ljmp MAIN
     
 ReflowDone:
+    setb GREEN_LED
     mov R4, #5
 SpeakerLoop:
     lcall BeepSpeaker
