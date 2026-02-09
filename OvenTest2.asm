@@ -16,11 +16,11 @@ T1_LOAD EQU 256-(2*CLK) / (32*12*BAUD) ;Load 253 so it counts 3 counts before ov
 
 
 ; ********* Buttons ***********
-SELECT_BUTTON equ P3_4 ; middle left
-RESET_BUTTON  equ KEY_1
+SELECT_BUTTON equ P3_4 ; middle
+RESET_BUTTON  equ P3_2 ; left
 START_BUTTON  equ P3_5 ; middle right
 STOP_BUTTON   equ P3_7 ; right 
-PARAM_BUTTON  equ P3_3 ; left
+PARAM_BUTTON  equ P3_3 ; middle left
 
 OVEN_PIN      equ P0.0
 SOUND_OUT     equ P1.5 ; Speaker attached to this pin
@@ -134,6 +134,7 @@ COL4 EQU P3.0
 
 ;                           1234567890123456
 blank_row:              db '                ', 0
+preset_message:         db 'Presets: 1 2 3 4', 0
 param_message:          db 'Select Parameter', 0
 soak_temp_message:      db 'Soak Temp: xxx C', 0
 soak_time_message:      db 'Soak Time: xx  s', 0
@@ -310,8 +311,6 @@ Inc_Done:
 	cjne a, #high(1000), Timer2_ISR_Midpoint
     
     
-    
-    
 	mov ADC_C, #00000000b
 	
 
@@ -405,7 +404,7 @@ INITIALIZE:
 	mov P0MOD, #10101011b ; P0.0(OVEN_PIN), P0.1, P0.3, P0.5, P0.7(LCD) are outputs. 
     mov P1MOD, #11110110b ; P1.7, P1.5, P1.1(LCD), 1.2, 1.4, 1.6(ROW) are outputs
     mov P2MOD, #00000001b ; output: 2.0(ROW) input: 2.2, 2.4, 2.6(COL)
-    mov P3MOD, #00000000b ; input: 3.0 (COL), 3.3, 3.4, 3.5, 3.7 
+    mov P3MOD, #00000000b ; input: 3.0 (COL), 3.2, 3.3, 3.4, 3.5, 3.7 
     ; for keypad, (ROWS as output-1)1.2, 1.4, 1.6, 2.0 - (COLS as input-0) 2.2, 2.4, 2.6, 3.0
     mov ADC_C, #0x00      ; Select ADC Channel 0
     mov ADC_C, #10000000b ; ADC Enable = 1 test******
@@ -715,9 +714,28 @@ Display_BCD_7_Seg:
 
 	mov x+0, TEMP+0
 	mov x+1, TEMP+1
+    mov x+2, TEMP+2
 	lcall hex2bcd
 
 	mov dptr, #T_7seg
+
+    mov a, bcd+2
+    swap a
+    anl a, #0FH
+    movc a, @a+dptr
+    mov HEX5, a
+
+    mov a, bcd+2
+    anl a, #0FH
+    movc a, @a+dptr
+    mov HEX4, a
+
+    mov a, bcd+1
+    swap a
+    anl a, #0FH
+    movc a, @a+dptr
+    mov HEX3, a
+
     mov a, bcd+1
     anl a, #0FH
     movc a, @a+dptr
@@ -977,6 +995,16 @@ MAIN:
 
 MAIN_LOOP:
 
+; **************************** Preset Settings **************************************
+
+;StatePInit:
+;    Set_Cursor(1,1)
+;    Send_Constant_String ()
+
+
+
+
+
 PARAM_FSM:
 
 ; **************************** FSM for selecting parameters *************************
@@ -1098,8 +1126,7 @@ StateADone:
     inc STATE_VAR_2
     clr SELECT_BUTTON_FLAG
     clr KEYPAD_FLAG
-    mov a, #0
-    mov keypad_digit_count, a
+    mov keypad_digit_count, #0
     ljmp StateA
 
 
@@ -1110,10 +1137,10 @@ StateBInit:
 StateB:
     jnb RESET_BUTTON, StateB_ResetToMain
     mov a, STATE_VAR_2
-    cjne a, #1, StateCInit
+    cjne a, #1, StateB_C
 
     lcall Check_Select_Button_Press
-    jb SELECT_BUTTON_FLAG, StateBDone
+    jb SELECT_BUTTON_FLAG, StateBtoDone
 
     mov x+0, soak_time_set+0
     mov x+1, #0
@@ -1126,23 +1153,48 @@ StateB:
 
     lcall Check_Param_Button_Press
     jb PARAM_BUTTON_FLAG, Inc_Soak_Time
-
-StateB_Keypad:
-    ;lcall Keypad
-    ;jnc StateB
-
-    ;lcall Shift_Digits_Left
-
-    ;mov soak_time_set+0, bcd+0
-    ;mov soak_time_set+1, bcd+1
-
-    sjmp StateB
+    ljmp StateA_Keypad
 
 StateB_ResetToMain:
 ljmp MAIN
 
 StateB_C:
 ljmp StateCInit
+
+StateBtoDone:
+ljmp StateBDone
+
+StateB_Keypad:
+    lcall Keypad
+    jnc StateB
+
+    jb KEYPAD_FLAG, StateB_Keypad_Continue
+    setb KEYPAD_FLAG
+
+    mov a, #0
+    mov bcd+0, a
+    mov bcd+1, a
+    mov bcd+2, a
+    mov bcd+3, a
+
+StateB_Keypad_Continue:
+    lcall Shift_Digits_Left
+    jnc StateB
+
+    lcall bcd2hex
+
+    mov soak_time_set+0, x+0
+
+    mov x+0, soak_time_set+0
+    mov x+1, #0
+    mov x+2, #0
+    mov x+3, #0
+    lcall hex2bcd
+
+    Set_Cursor(2,12)
+    Display_BCD(bcd+0)
+
+    ljmp StateB
 
 
     Inc_Soak_Time:
@@ -1175,13 +1227,15 @@ ljmp StateCInit
 
     Soak_Time_Tens_Done:
         mov soak_time_set, a
-        sjmp StateB
+        ljmp StateB
 
 StateBDone:
     lcall BeepSpeaker
     inc STATE_VAR_2
     clr SELECT_BUTTON_FLAG
-    sjmp StateB
+    clr KEYPAD_FLAG
+    mov keypad_digit_count, #0
+    ljmp StateB
 
 
 StateCInit:
@@ -1190,10 +1244,10 @@ StateCInit:
 StateC:
     jnb RESET_BUTTON, StateC_ResetToMain
     mov a, STATE_VAR_2
-    cjne a, #2, StateDInit
+    cjne a, #2, StateC_D
 
     lcall Check_Select_Button_Press
-    jb SELECT_BUTTON_FLAG, StateCDone
+    jb SELECT_BUTTON_FLAG, StateCtoDone
 
     mov x+0, reflow_temp_set+0
     mov x+1, reflow_temp_set+1
@@ -1208,17 +1262,7 @@ StateC:
 
     lcall Check_Param_Button_Press
     jb PARAM_BUTTON_FLAG, Inc_Reflow_Temp
-
-StateC_Keypad:
-    ;lcall Keypad
-    ;jnc StateC
-
-    ;lcall Shift_Digits_Left
-
-    ;mov reflow_temp_set+0, bcd+0
-    ;mov reflow_temp_set+1, bcd+1
-
-    sjmp StateC
+    ljmp StateC_Keypad
 
 StateC_ResetToMain:
 ljmp MAIN
@@ -1226,9 +1270,46 @@ ljmp MAIN
 StateC_D:
 ljmp StateDInit
 
+StateCtoDone:
+ljmp StateCDone
+
+StateC_Keypad:
+    lcall Keypad
+    jnc StateC
+
+    jb KEYPAD_FLAG, StateC_Keypad_Continue
+
+    mov a, #0
+    mov bcd+0, a
+    mov bcd+1, a
+    mov bcd+2, a
+    mov bcd+3, a
+
+StateC_Keypad_Continue:
+    lcall Shift_Digits_Left
+    jnc StateC
+
+    lcall bcd2hex
+
+    mov reflow_temp_set+0, x+0
+    mov reflow_temp_set+1, x+1
+
+    mov x+0, reflow_temp_set+0
+    mov x+1, soak_temp_set+1
+    mov x+2, #0
+    mov x+3, #0
+    lcall hex2bcd
+
+    Set_Cursor(2,12)
+    Display_BCD(bcd+1)
+    Display_BCD(bcd+1)
+
+    ljmp StateC
+
 
     Inc_Reflow_Temp:
         clr PARAM_BUTTON_FLAG
+
         mov a, reflow_temp_set
 
         jb UPDOWN, Dec_Reflow_Temp
@@ -1255,13 +1336,15 @@ ljmp StateDInit
 
     Reflow_Temp_Tens_Done:
         mov reflow_temp_set, a
-        sjmp StateC
+        ljmp StateC
 
 StateCDone:
     lcall BeepSpeaker
     inc STATE_VAR_2
     clr SELECT_BUTTON_FLAG
-    sjmp StateC
+    clr KEYPAD_FLAG
+    mov keypad_digit_count, #0
+    ljmp StateC
 
 
 StateDInit:
@@ -1274,7 +1357,7 @@ StateD:
     cjne a, #3, StateD_R
 
     lcall Check_Select_Button_Press
-    jb SELECT_BUTTON_FLAG, StateDDone
+    jb SELECT_BUTTON_FLAG, StateDtoDone
 
     mov x+0, reflow_time_set+0
     mov x+1, #0
@@ -1288,22 +1371,48 @@ StateD:
     lcall Check_Param_Button_Press
     jb PARAM_BUTTON_FLAG, Inc_Reflow_Time
 
-StateD_Keypad:
-    ;lcall Keypad 
-    ;jnc StateD
-
-    ;lcall Shift_Digits_Left
-
-    ;mov reflow_time_set+0, bcd+0
-    ;mov reflow_time_set+1, bcd+1
-
-    sjmp StateD
-
 StateD_ResetToMain:
 ljmp MAIN
 
 StateD_R:
 ljmp ReadyStateInit
+
+StateDtoDone:
+ljmp StateDDone
+
+StateD_Keypad:
+    lcall Keypad 
+    jnc StateD
+
+    jb KEYPAD_FLAG, StateD_Keypad_Continue
+    setb KEYPAD_FLAG
+
+    mov a, #0
+    mov bcd+0, a
+    mov bcd+1, a
+    mov bcd+2, a
+    mov bcd+3, a
+
+StateD_Keypad_Continue:
+    lcall Shift_Digits_Left
+    jnc StateD
+
+    lcall bcd2hex
+
+    mov reflow_time_set+0, x+0
+    ;mov reflow_time_set+1, x+1
+
+    mov x+0, reflow_time_set+0
+    mov x+1, #0
+    mov x+2, #0
+    mov x+3, #0
+    lcall hex2bcd
+
+    Set_Cursor(2,12)
+    ;Display_BCD(bcd+1)
+    Display_BCD(bcd+0)
+
+    ljmp StateD
 
 
     Inc_Reflow_Time:        
@@ -1322,26 +1431,27 @@ ljmp ReadyStateInit
 
     Dec_Reflow_Time:
         jb TENS, Dec_Reflow_Time_Tens
-        clr c
 
+        clr c
         subb a, #1
         sjmp Reflow_Time_Tens_Done
 
     Dec_Reflow_Time_Tens:
         clr c
-
         subb a, #10
         sjmp Reflow_Time_Tens_Done
 
     Reflow_Time_Tens_Done:
         mov reflow_time_set, a
-        sjmp StateD
+        ljmp StateD
 
 StateDDone:
     lcall BeepSpeaker
     inc STATE_VAR_2
     clr SELECT_BUTTON_FLAG
-    sjmp StateD
+    clr KEYPAD_FLAG
+    mov keypad_digit_count, #0
+    ljmp StateD
 
 
 ReadyStateInit:

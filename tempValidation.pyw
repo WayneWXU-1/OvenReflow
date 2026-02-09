@@ -157,7 +157,7 @@ DMMout.set ("NO DATA")
 DMM_Name.set ("--------")
 
 #==========================CHANGE THE COM PORT==========================#
-port = 'COMX'
+port = 'COM6'
 #==========================CHANGE THE COM PORT==========================#
 
 try:
