@@ -8,8 +8,8 @@ TIMER0_RELOAD EQU ((65536-(CLK/(12*TIMER0_RATE)))) ; The prescaler in the CV-805
 TIMER2_RATE   EQU 1000     ; 1000Hz, for a timer tick of 1ms
 TIMER2_RELOAD EQU ((65536-(CLK/(12*TIMER2_RATE))))
 BAND          EQU 2 ;for flat states
-LEAD2		  EQU 4 ;a too close overshoots currently
-LEAD          EQU 20 ;for ramp sates
+
+WINDOW      EQU 6     ; burst window length in seconds 
 
 BAUD   EQU 57600
 T1_LOAD EQU 256-(2*CLK) / (32*12*BAUD) ;Load 253 so it counts 3 counts before overflowing, which gives us a 57600 baud rate with a 33.333MHz clock
@@ -22,12 +22,16 @@ START_BUTTON  equ P3_5 ; middle right
 STOP_BUTTON   equ P3_7 ; right 
 PARAM_BUTTON  equ P3_3 ; middle left
 
-OVEN_PIN      equ P0.0
-SOUND_OUT     equ P1.5 ; Speaker attached to this pin
-UPDOWN        equ SWA.0
-TENS          equ SWA.1
-RED_LED       equ P1.0
-GREEN_LED     equ P3.1
+OVEN_PIN      equ P0_0
+SOUND_OUT     equ P1_5 ; Speaker attached to this pin
+UPDOWN        equ SWA_0
+TENS          equ SWA_1
+PRESET1       equ SWA_9
+PRESET2       equ SWA_8
+PRESET3       equ SWA_7
+PRESET4       equ SWA_6
+RED_LED       equ P1_0
+GREEN_LED     equ P3_1
 
 ; Reset vector
 org 0x0000
@@ -90,6 +94,9 @@ beep_count:      ds 1
 LOW_LIMIT:  ds 2
 HIGH_LIMIT: ds 2
 THRESHOLD:  ds 2
+ON_SECS:     ds 1
+PHASE:       ds 1    ;counter for seconds
+LEAD:        ds 2 ;for ramp sates
 
 x:		ds	4 ;used for 32 bit math for temperature conversion
 y:		ds	4 ;used for 32 bit math for temperature conversion
@@ -102,7 +109,6 @@ BCD_counter:  ds 1 ; The BCD counter incrememted in the ISR and displayed in the
 
 ; **** keypad variables ****
 keypad_digit_count: ds 1
-
 
 bseg
 START_FLAG:         DBIT 1  ; Use DBIT for single bits in bseg
@@ -128,7 +134,7 @@ ELCD_D7 equ P0.1
 ROW1 EQU P1.2
 ROW2 EQU P1.4
 ROW3 EQU P1.6
-ROw4 EQU P2.0
+ROW4 EQU P2.0
 COL1 EQU P2.2
 COL2 EQU P2.4
 COL3 EQU P2.6
@@ -364,11 +370,11 @@ Timer2_ISR_Bypass:
 Checkforstate1:
     MOV A, STATE_VAR_1
     CJNE A, #1, NOT_STATE_1
-    LCALL pwm_for_ramp
+    LCALL RampBurstPWM
     SJMP PWM_EXIT
 NOT_STATE_1:
     CJNE A, #3, NOT_STATE_3
-    LCALL pwm_for_ramp2
+    LCALL RampBurstPWM
     SJMP PWM_EXIT
 NOT_STATE_3:
     CJNE A, #2, NOT_STATE_2
@@ -491,8 +497,6 @@ ENDMAC
 
 Shift_Digits_Left:
 	mov R0, #4 ; shift left four bits
-    cjne a, #3, Shift_Digits_Left_L0
-ret
 
     mov a, STATE_VAR_2
     cjne a, #0, KCheck_StateC
@@ -745,7 +749,8 @@ Display_BCD_7_Seg:
 
 	mov x+0, TEMP+0
 	mov x+1, TEMP+1
-    mov x+2, TEMP+2
+    mov x+2, #0
+    mov x+3, #0
 	lcall hex2bcd
 
 	mov dptr, #T_7seg
@@ -866,69 +871,64 @@ flat_off:
 
 
 
+RampBurstPWM:
 
-pwm_for_ramp:
-		MOV     A, TARGET          
+        ;increment phase until it equals window then pahse =0
+        MOV     A, PHASE          
+        INC     A                 ; A <- A + 1
+        CJNE    A, #WINDOW, phase_ok  ; if A != WINDOW, keep it
+        MOV     A, #00h           ; else wrap to 0
+phase_ok:
+        MOV     PHASE, A          ; store updated phase 
+
+        ; calculate threasheld = target - lead
+        MOV     A, TARGET         ; A <- TARGET
         CLR     C                 
-        SUBB    A, #LEAD         
-                                 
-        JNC     ramp_thresh_ok    
+        SUBB    A, LEAD           
+        JNC     thresh_ok        
         MOV     A, #00h           
-ramp_thresh_ok:
+thresh_ok:
         MOV     THRESHOLD, A         
 
-        ;if less than threshold turn power on 
-        MOV     A, TEMP          
-        CLR     C                 
-        SUBB    A, THRESHOLD         ; A = curren temp - threshold(target-lead)
-                                 
-        JC      ramp_force_on     ; If below threshold force on and return
+        ;if temp is less than threshold, full power
+        MOV     A, TEMP           
+        CLR     C
+        SUBB    A, THRESHOLD         
+        JC      force_on         
 
-        ljmp 	ramp_set_off     
+        ; if temp is greater than target then off
+        MOV     A, TEMP           
+        CLR     C
+        SUBB    A, TARGET         
+        JNC     force_off         
 
+        ;else burst pwm 
+        ; CMD_ON = 1 if PHASE < ON_SECS else 0
+        MOV     A, PHASE          ; A <- PHASE (0..WINDOW-1)
+        CLR     C
+        SUBB    A, ON_SECS        ; A <- PHASE - ON_SECS
+                                 ; borrow => PHASE < ON_SECS
+        JC      burst_on          ; if PHASE < ON_SECS => ON
+        SJMP    burst_off         ; else OFF
 
-ramp_done:
-        RET                      
-
-ramp_force_on:
-        SETB p0.0      ;power on
+force_on:
+        SETB p0.0      ;less than threshold
         RET
 
-ramp_set_off:
-        CLR p0.0
-        RET 
-        
-
-pwm_for_ramp2:
-		MOV     A, TARGET          
-        CLR     C                 
-        SUBB    A, #LEAD2         
-                                 
-        JNC     ramp_thresh_ok2    
-        MOV     A, #00h           
-ramp_thresh_ok2:
-        MOV     THRESHOLD, A         
-
-        ;if less than threshold turn power on 
-        MOV     A, TEMP          
-        CLR     C                 
-        SUBB    A, THRESHOLD         ; A = curren temp - threshold(target-lead)
-                                 
-        JC      ramp_force_on2     ; If below threshold force on and return
-
-        ljmp 	ramp_set_off2     
-
-
-ramp_done2:
-        RET                      
-
-ramp_force_on2:
-        SETB p0.0      ;power on
+force_off:
+        CLR p0.0      
         RET
 
-ramp_set_off2:
-        CLR p0.0
-        RET 
+burst_on:
+        SETB p0.0      ; ON for ON_SECS seconds each window
+        RET
+
+burst_off:
+        CLR p0.0      ; OFF for remaining seconds
+        RET
+
+
+
 
 ;==============SPEAKER FUNCTIONS==============;
 
@@ -1032,9 +1032,7 @@ MAIN_LOOP:
 
 ;StatePInit:
 ;    Set_Cursor(1,1)
-;    Send_Constant_String ()
-
-
+;    Send_Constant_String (#preset_message)
 
 
 
@@ -1524,6 +1522,7 @@ State0:
     jnb STOP_BUTTON, State0_StopReflow
     CLR p0.0 ;oven off
     mov a, STATE_VAR_1
+    mov TIME, #0
     cjne a, #0, State1
     jb START_FLAG, State0Done
     sjmp State0
@@ -1533,6 +1532,9 @@ ljmp StopReflow
 
 State0Done:
     lcall BeepSpeaker
+    MOV PHASE, #00h
+    MOV ON_SECS, #3
+    MOV LEAD, #20
     inc STATE_VAR_1
     mov POWER, #100
     mov TIME, #0
@@ -1620,6 +1622,9 @@ LessThanState2:
     sjmp State2
 GreaterThanState2:
     lcall BeepSpeaker
+    MOV PHASE, #00h
+    MOV ON_SECS, #3
+    MOV LEAD, #10
     inc STATE_VAR_1
     mov POWER, #100
     ljmp State2
@@ -1732,12 +1737,14 @@ StopReflow:
     Send_Constant_String (#stop_message)
     Set_Cursor(2,1)
     Send_Constant_String (#restart_message)
-    clr P0.0 ; Turn power off
+    lcall BeepSpeaker
+    clr OVEN_PIN ; Turn power off
 ForeverStopped:
     jnb RESET_BUTTON, RestartProcess
     sjmp ForeverStopped
 
 STOPOVEN:
+    setb RED_LED
     Set_Cursor(1,1)
     Send_Constant_String (#abortcondition_message)
     Set_Cursor(2,1)
