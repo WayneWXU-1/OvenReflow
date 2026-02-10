@@ -26,10 +26,10 @@ OVEN_PIN      equ P0_0
 SOUND_OUT     equ P1_5 ; Speaker attached to this pin
 UPDOWN        equ SWA_0
 TENS          equ SWA_1
-PRESET1       equ SWA_9
-PRESET2       equ SWA_8
-PRESET3       equ SWA_7
-PRESET4       equ SWA_6
+PRESET1_SW     equ SWA_7
+PRESET2_SW     equ SWA_6
+PRESET3_SW     equ SWA_5
+PRESET4_SW     equ SWA_4
 RED_LED       equ P1_0
 GREEN_LED     equ P3_1
 
@@ -70,7 +70,16 @@ SECOND_COUNTER:  DS 1
 TEMP_HIGH_BYTE:  DS 1 
 TEMP_LOW_BYTE:   DS 1 
 
-
+;---------ADC RELATED-----;
+ADCREFH:		 DS 1
+ADCREFL:         DS 1
+LM335H:          DS 1
+LM335L:          DS 1
+TCH:			 DS 1
+TCL:			 DS 1
+TH_H:            DS 1
+TH_L:            DS 1
+;----------------------
 TEMP:            DS 5
 TIME:            DS 2
 POWER:           DS 2
@@ -143,6 +152,9 @@ COL4 EQU P3.0
 ;                           1234567890123456
 blank_row:              db '                ', 0
 preset_message:         db 'Presets: 1 2 3 4', 0
+stop_to_skip_message:   db 'SELECT to skip. ', 0
+preset_param_message1:  db 'sTMP:xxx sTME:xx', 0
+preset_param_message2:  db 'rTMP:xxx rTME:xx', 0
 param_message:          db 'Select Parameter', 0
 soak_temp_message:      db 'Soak Temp: xxx C', 0
 soak_time_message:      db 'Soak Time: xx  s', 0
@@ -150,11 +162,11 @@ reflow_temp_message:    db 'Rflw Temp: xxx C', 0
 reflow_time_message:    db 'Rflw Time: xx  s', 0
 ready_message:          db 'Ready to Start! ', 0
 state0_message:         db '-----State0-----', 0
-state1_message:         db '-----State1-----', 0
-state2_message:         db '-----State2-----', 0
-state3_message:         db '-----State3-----', 0
-state4_message:         db '-----State4-----', 0
-state5_message:         db '-----State5-----', 0
+state1_message:         db '==Ramp To Soak==', 0
+state2_message:         db '======Soak======', 0
+state3_message:         db '==Ramp To Peak==', 0
+state4_message:         db '=====Reflow=====', 0
+state5_message:         db '====Cooling!====', 0
 abortcondition_message: db '*****ABORT!*****', 0
 reflow_message:         db 'TIME:XXXTEMP:XXX', 0
 reflowdone_message:     db 'Reflow Complete!', 0
@@ -247,6 +259,67 @@ putchar:
     clr TI  ; Reset back to 0 to indicate we are transmitting 
     mov SBUF, a ; accumulator will have output chharacter already stored on it
     ret
+
+SendString:
+    clr A
+    movc A, @A+DPTR
+    jz SendStringDone
+    lcall putchar
+    inc DPTR
+    sjmp SendString
+SendStringDone:
+    ret
+
+
+; Send number **** new*****
+SendNum:
+	mov a, @R0
+	add a, #'0'
+	lcall putchar
+	ret
+
+    Send_BCD mac
+	push ar0
+	mov r0, %0
+	lcall ?Send_BCD
+	pop ar0
+endmac
+
+?Send_BCD:
+	push acc
+	; Write most significant digits
+	mov a, r0
+	swap a
+	anl a, #0fh
+	orl a, #30h
+	lcall putchar
+	
+	; write least significant digits
+	mov a, r0
+	anl a, #0fh
+	orl a, #30h
+	lcall putchar
+	pop acc
+	ret
+	
+SendTemp:
+	;mov DPTR, #TempPre
+	;lcall SendString
+	
+	Send_BCD(bcd+1)
+	
+	Send_BCD(bcd+0)
+	
+	mov DPTR, #TempSuf
+	lcall SendString
+	
+	ret
+	;Sends 
+ 
+;TempPre:
+;    db  'T = ', 0
+TempSuf:
+	db	'\r', '\n', 0
 
 
 ; ******************************* TIMER ISRS ************************************
@@ -345,8 +418,11 @@ Inc_Done:
     ;result is still in x
     mov TEMP+0, x+0
     mov TEMP+1, x+1
+    mov TEMP+2, #0
     
-    lcall Display_Voltage_Serial
+    ;lcall Display_Voltage_Serial
+    lcall hex2bcd
+    lcall SendTemp
     lcall Display_BCD_7_seg
 
     sjmp Timer2_ISR_Bypass
@@ -1013,16 +1089,16 @@ MAIN:
     mov x+2, #0x0000
     mov x+3, #0x0000
 
-    mov soak_temp_set+0, #150
+    mov soak_temp_set+0, #0
     mov soak_temp_set+1, a
 
-    mov soak_time_set+0, #60
+    mov soak_time_set+0, #0
     mov soak_time_set+1, a
 
-    mov reflow_temp_set+0, #220
+    mov reflow_temp_set+0, #0
     mov reflow_temp_set+1, a
 
-    mov reflow_time_set+0, #30
+    mov reflow_time_set+0, #0
     mov reflow_time_set+1, a
 
 
@@ -1030,10 +1106,162 @@ MAIN_LOOP:
 
 ; **************************** Preset Settings **************************************
 
-;StatePInit:
-;    Set_Cursor(1,1)
-;    Send_Constant_String (#preset_message)
+; **************************** Preset Settings **************************************
 
+StatePInit:
+    Set_Cursor(1,1)
+    Send_Constant_String (#preset_message)
+	Set_Cursor(2,1)
+	Send_Constant_String (#stop_to_skip_message)
+
+    clr SELECT_BUTTON_FLAG
+
+StateP:
+    lcall Check_Select_Button_Press
+
+    jb PRESET1_SW, Presetx1
+    jb PRESET2_SW, Presetx2
+    jb PRESET3_SW, Presetx3
+    jb PRESET4_SW, Presetx4
+    jb SELECT_BUTTON_FLAG, GoToParam
+
+sjmp StateP
+
+GoToParam:
+ljmp PARAM_FSM
+
+Presetx1:
+	mov soak_temp_set, #170
+	mov soak_time_set, #75
+	mov reflow_temp_set, #230
+	mov reflow_time_set, #45
+
+	lcall BeepSpeaker
+
+Preset1_Display:
+    lcall Preset_Displays
+    lcall Check_Select_Button_Press
+	jb SELECT_BUTTON_FLAG, P1GT0
+	jnb PRESET1_SW, P1GTI
+	sjmp Preset1_Display
+
+P1GTI:
+lcall BeepSpeaker
+ljmp StatePInit
+
+P1GT0:
+ljmp ReadyStateInit
+
+Presetx2:
+	mov soak_temp_set, #160
+	mov soak_time_set, #90
+	mov reflow_temp_set, #230
+	mov reflow_time_set, #60
+
+	lcall BeepSpeaker
+
+
+Preset2_Display:
+    lcall Preset_Displays
+    lcall Check_Select_Button_Press
+	jb SELECT_BUTTON_FLAG, P2GT0
+	jnb PRESET2_SW, P2GTI
+	sjmp Preset2_Display
+
+P2GTI:
+lcall BeepSpeaker
+ljmp StatePInit
+
+P2GT0:
+ljmp ReadyStateInit
+
+Presetx3:
+	mov soak_temp_set, #150
+	mov soak_time_set, #120
+	mov reflow_temp_set, #225
+	mov reflow_time_set, #60
+
+	lcall BeepSpeaker
+
+Preset3_Display:
+    lcall Preset_Displays
+    lcall Check_Select_Button_Press
+	jb SELECT_BUTTON_FLAG, P3GT0
+	jnb PRESET3_SW, P3GTI
+	sjmp Preset1_Display
+
+P3GTI:
+lcall BeepSpeaker
+ljmp StatePInit
+
+P3GT0:
+ljmp ReadyStateInit
+
+Presetx4:
+	mov soak_temp_set, #180
+	mov soak_time_set, #60
+	mov reflow_temp_set, #235
+	mov reflow_time_set, #30
+
+	lcall BeepSpeaker
+
+Preset4_Display:
+    lcall Preset_Displays
+    lcall Check_Select_Button_Press
+	jb SELECT_BUTTON_FLAG, P4GT0
+	jnb PRESET4_SW, P4GTI
+	sjmp Preset4_Display
+
+P4GTI:
+lcall BeepSpeaker
+ljmp StatePInit
+
+P4GT0:
+ljmp ReadyStateInit
+
+
+Preset_Displays:
+
+    push acc
+    push psw
+
+	Set_Cursor(1,1)
+	Send_Constant_String(#preset_param_message1)
+	Set_Cursor(2,1)
+	Send_Constant_String(#preset_param_message2)
+
+	mov x+0, soak_temp_set+0
+	mov x+1, soak_temp_set+1
+	lcall hex2bcd
+	Set_Cursor(1,5)
+	Display_BCD(bcd+1)
+	Display_BCD(bcd+0)
+	Set_Cursor(1,5)
+	Send_Constant_String(#':')
+
+	mov x+0, soak_time_set+0
+	lcall hex2bcd
+	Set_Cursor(1,15)
+	Display_BCD(bcd+0)
+
+	mov x+0, reflow_temp_set+0
+	mov x+1, reflow_temp_set+1
+	lcall hex2bcd
+	Set_Cursor(2,5)
+	Display_BCD(bcd+1)
+	Display_BCD(bcd+0)
+	Set_Cursor(2,5)
+	Send_Constant_String(#':')
+
+	mov x+0, reflow_time_set+0
+	lcall hex2bcd
+	Set_Cursor(2,15)
+	Display_BCD(bcd+0)
+
+    pop psw
+    pop acc
+
+	ret
 
 
 PARAM_FSM:
@@ -1052,13 +1280,14 @@ StateAInit:
     Set_Cursor(2,1)
     Send_Constant_String (#soak_temp_message)
 
+    clr SELECT_BUTTON_FLAG
     clr KEYPAD_FLAG
     mov keypad_digit_count, #0
 
 StateA:
     jnb RESET_BUTTON, StateA_ResetToMain
-    mov a, STATE_VAR_2
-    cjne a, #0, StateA_B
+    mov R6, STATE_VAR_2
+    cjne R6, #0, StateA_B
 
     lcall Check_Select_Button_Press
     jb SELECT_BUTTON_FLAG, StateAtoDone
@@ -1165,10 +1394,14 @@ StateBInit:
     Set_Cursor(2,1)
     Send_Constant_String(#soak_time_message)
 
+    clr SELECT_BUTTON_FLAG
+    clr KEYPAD_FLAG
+    mov keypad_digit_count, #0
+
 StateB:
     jnb RESET_BUTTON, StateB_ResetToMain
-    mov a, STATE_VAR_2
-    cjne a, #1, StateB_C
+    mov R6, STATE_VAR_2
+    cjne R6, #1, StateB_C
 
     lcall Check_Select_Button_Press
     jb SELECT_BUTTON_FLAG, StateBtoDone
@@ -1271,11 +1504,16 @@ StateBDone:
 
 StateCInit:
     Set_Cursor(2,1)
-    send_constant_string(#reflow_temp_message)
+    Send_Constant_String(#reflow_temp_message)
+
+    clr SELECT_BUTTON_FLAG
+    clr KEYPAD_FLAG
+    mov keypad_digit_count, #0
+
 StateC:
     jnb RESET_BUTTON, StateC_ResetToMain
-    mov a, STATE_VAR_2
-    cjne a, #2, StateC_D
+    mov R6, STATE_VAR_2
+    cjne R6, #2, StateC_D
 
     lcall Check_Select_Button_Press
     jb SELECT_BUTTON_FLAG, StateCtoDone
@@ -1381,12 +1619,16 @@ StateCDone:
 
 StateDInit:
     Set_Cursor(2,1)
-    send_constant_string(#reflow_time_message)
+    Send_Constant_String(#reflow_time_message)
+
+    clr SELECT_BUTTON_FLAG
+    clr KEYPAD_FLAG
+    mov keypad_digit_count, #0
 
 StateD:
     jnb RESET_BUTTON, StateD_ResetToMain
-    mov a, STATE_VAR_2
-    cjne a, #3, StateD_R
+    mov R6, STATE_VAR_2
+    cjne R6, #3, StateD_R
 
     lcall Check_Select_Button_Press
     jb SELECT_BUTTON_FLAG, StateDtoDone
@@ -1492,6 +1734,11 @@ ReadyStateInit:
     Send_Constant_String(#ready_message)
     Set_Cursor(2,1)
     Send_Constant_String(#blank_row)
+
+    clr SELECT_BUTTON_FLAG
+    clr PARAM_BUTTON_FLAG
+    clr KEYPAD_FLAG
+    mov keypad_digit_count, #0
 
 ReadyState:
     ;jnb seconds_flag, skipSerial_0 *** not too sure what this does

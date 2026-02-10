@@ -157,7 +157,7 @@ DMMout.set ("NO DATA")
 DMM_Name.set ("--------")
 
 #==========================CHANGE THE COM PORT==========================#
-port = 'COM6'
+port = 'COM7' # Change to COM port assigned to your board
 #==========================CHANGE THE COM PORT==========================#
 
 try:
