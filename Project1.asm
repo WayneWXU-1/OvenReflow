@@ -1129,6 +1129,7 @@ StateP:
 sjmp StateP
 
 GoToParam:
+lcall BeepSpeaker
 ljmp PARAM_FSM
 
 Presetx1:
@@ -1151,6 +1152,7 @@ lcall BeepSpeaker
 ljmp StatePInit
 
 P1GT0:
+lcall BeepSpeaker
 ljmp ReadyStateInit
 
 Presetx2:
@@ -1174,6 +1176,7 @@ lcall BeepSpeaker
 ljmp StatePInit
 
 P2GT0:
+lcall BeepSpeaker
 ljmp ReadyStateInit
 
 Presetx3:
@@ -1195,6 +1198,7 @@ lcall BeepSpeaker
 ljmp StatePInit
 
 P3GT0:
+lcall BeepSpeaker
 ljmp ReadyStateInit
 
 Presetx4:
@@ -1217,6 +1221,7 @@ lcall BeepSpeaker
 ljmp StatePInit
 
 P4GT0:
+lcall BeepSpeaker
 ljmp ReadyStateInit
 
 

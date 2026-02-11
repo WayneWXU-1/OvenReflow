@@ -25,8 +25,9 @@ DMMout = StringVar()
 portstatus = StringVar()
 DMM_Name = StringVar()
 connected=0
-global ser
-   
+global ser 
+last_valid_val2=22.0
+
 def Just_Exit():
     top.destroy()
     try:
@@ -36,6 +37,8 @@ def Just_Exit():
 
 def update_temp():
     global ser, connected
+    global last_valid_val2
+
     if connected==0:
         top.after(5000, FindPort) # Not connected, try to reconnect again in 5 seconds
         return
@@ -81,13 +84,14 @@ def update_temp():
           except:
              val2=0
 
-        if abs(val2 - ktemp) <= 10 :
-           last_valid_val2 = val2
-        else:
-            val2 = last_valid_val2
-
-       if valid_val == 1 :
+       if valid_val == 1 and len(strin2) > 0 :
            ktemp=round(kconvert.mV_to_C(val, cj),1)
+
+           if abs(val2 - ktemp) <= 10 :
+                last_valid_val2 = val2
+           else:
+                val2 = last_valid_val2
+
            if ktemp < -200:  
                Temp.set("UNDER")
                
@@ -98,9 +102,6 @@ def update_temp():
                   print(ktemp, val2, round(abs(ktemp-val2),2))
                except:
                   dummy=2
-
-            elif abs(ktemp-val2) > 10:
-              
 
            elif ktemp > 1372:
                Temp.set("OVER")

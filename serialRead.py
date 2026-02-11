@@ -4,8 +4,11 @@ import matplotlib.animation as animation
 import sys
 import serial
 from collections import deque
+
 import csv
 import time
+
+import smtplib
 
 xsize = 100  # Number of data points visible on x-axis
 SMOOTH_WINDOW = 10  # Number of samples to average for smoothing
@@ -76,6 +79,25 @@ def on_close_figure(event):
         print(f"Data saved to {filename}")
     
     ser.close()
+
+    smtpObj = smtplib.SMTP('smtp.gmail.com', 587)
+    smtpObj.ehlo()
+    smtpObj.starttls()
+    smtpObj.login('faleksa2006@gmail.com', 'ssfa ycio kxbs zzqy')
+
+    from_address = 'faleksa2006@gmail.com'
+    to_address = 'peterlake006@gmail.com'
+    message = """\
+    Subject: CSV Export
+
+    Attached is the current session's data collection.
+    """
+
+    smtpObj.sendmail(from_address, to_address, message)
+
+    # Quit the SMTP session
+    smtpObj.quit()
+
     sys.exit(0)
 
 # Setup plot
