@@ -81,10 +81,27 @@ def update_temp():
           except:
              val2=0
 
+        if abs(val2 - ktemp) <= 10 :
+           last_valid_val2 = val2
+        else:
+            val2 = last_valid_val2
+
        if valid_val == 1 :
            ktemp=round(kconvert.mV_to_C(val, cj),1)
            if ktemp < -200:  
                Temp.set("UNDER")
+               
+           elif ktemp < 25 and ktemp > 0:
+               val2 -= 2
+               Temp.set(ktemp)
+               try:
+                  print(ktemp, val2, round(abs(ktemp-val2),2))
+               except:
+                  dummy=2
+
+            elif abs(ktemp-val2) > 10:
+              
+
            elif ktemp > 1372:
                Temp.set("OVER")
            else:

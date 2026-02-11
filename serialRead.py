@@ -4,13 +4,15 @@ import matplotlib.animation as animation
 import sys
 import serial
 from collections import deque
+import csv
+import time
 
 xsize = 100  # Number of data points visible on x-axis
 SMOOTH_WINDOW = 10  # Number of samples to average for smoothing
 
 # Configure the serial port
 ser = serial.Serial(
-    port='COM9',
+    port='COM6',
     baudrate=57600,
     parity=serial.PARITY_NONE,
     stopbits=serial.STOPBITS_TWO,
@@ -26,18 +28,30 @@ def smooth(value):
     smooth_buffer.append(value)
     return sum(smooth_buffer) / len(smooth_buffer)
 
+import re
+
+csv_data = []
+
+# ... (rest of imports remain the same)
+
 def data_gen():
     t = 0
     while True:
         try:
             line = ser.readline().decode('ascii').strip()
             if line:
-                val = float(line)
-                smoothed_val = smooth(val)
-                t += 1
-                yield t, val, smoothed_val
+                # Find the first sequence of digits (and optional decimal)
+                match = re.search(r'(\d+(\.\d+)?)', line)
+                if match:
+                    val = float(match.group(1))
+                    
+                    # Filter crazy values (e.g., erroneous spikes > 500)
+                    if 0 <= val <= 300:
+                        smoothed_val = smooth(val)
+                        t += 1
+                        csv_data.append([t, val, smoothed_val])
+                        yield t, val, smoothed_val
         except (ValueError, UnicodeDecodeError):
-            # Skip invalid readings
             pass
 
 def run(data):
@@ -53,6 +67,14 @@ def run(data):
     return line_raw, line_smooth
 
 def on_close_figure(event):
+    filename = f"oven_data_{int(time.time())}.csv"
+
+    with open(filename, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['Time','Temperature','Smoothed Temperature'])
+        writer.writerows(csv_data)
+        print(f"Data saved to {filename}")
+    
     ser.close()
     sys.exit(0)
 
