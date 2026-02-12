@@ -8,10 +8,14 @@ else:
     import tkinter as Tkinter
     from tkinter import *
     from tkinter import messagebox as tkMessageBox
+    
 import time
+
 import serial
 import serial.tools.list_ports
 import kconvert
+
+
 
 top = Tk()
 top.resizable(0,0)
@@ -78,6 +82,7 @@ def update_temp():
        strin2 = strin2.rstrip()
        strin2 = strin2.decode()
 
+       
        if len(strin2) > 0:
           try:
              val2=float(strin2)

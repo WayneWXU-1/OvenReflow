@@ -22,7 +22,7 @@ START_BUTTON  equ P3_5 ; middle right
 STOP_BUTTON   equ P3_7 ; right 
 PARAM_BUTTON  equ P3_3 ; middle left
 
-OVEN_PIN      equ P0_0
+OVEN_PIN      equ p0.0
 SOUND_OUT     equ P1_5 ; Speaker attached to this pin
 UPDOWN        equ SWA_0
 TENS          equ SWA_1
@@ -1314,6 +1314,7 @@ lcall ADC_Bible
 sjmp StateP
 
 GoToParam:
+lcall BeepSpeaker
 ljmp PARAM_FSM
 
 P0P4:
@@ -1342,6 +1343,7 @@ lcall BeepSpeaker
 ljmp StatePInit
 
 P1GT0:
+lcall BeepSpeaker
 ljmp ReadyStateInit
 
 P1ADC:
@@ -1372,6 +1374,7 @@ lcall BeepSpeaker
 ljmp StatePInit
 
 P2GT0:
+lcall BeepSpeaker
 ljmp ReadyStateInit
 
 P2ADC:
@@ -1400,6 +1403,7 @@ lcall BeepSpeaker
 ljmp StatePInit
 
 P3GT0:
+lcall BeepSpeaker
 ljmp ReadyStateInit
 
 P3ADC:
@@ -1429,6 +1433,7 @@ lcall BeepSpeaker
 ljmp StatePInit
 
 P4GT0:
+lcall BeepSpeaker
 ljmp ReadyStateInit
 
 P4ADC:
@@ -2256,6 +2261,7 @@ StopReflow:
     Send_Constant_String (#restart_message)
     lcall BeepSpeaker
     clr OVEN_PIN ; Turn power off
+    clr EA
 ForeverStopped:
     jnb RESET_BUTTON, RestartProcess
     sjmp ForeverStopped
