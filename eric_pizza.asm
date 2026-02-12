@@ -98,6 +98,8 @@ soak_time:       ds 2
 REFLOW_TIME:     ds 2
 
 beep_count:      ds 1
+T0_RH:           ds 1   ;Timer0 reload high bit
+T0_RL:           ds 1   ;Timer0 reload low bit
 
 ; PWM variables
 LOW_LIMIT:  ds 2
@@ -327,8 +329,12 @@ Timer0_Init:
 	anl a, #0xf0 ; Clear the bits for timer 0
 	orl a, #0x01 ; Configure timer 0 as 16-timer
 	mov TMOD, a
-	mov TH0, #high(TIMER0_RELOAD)
-	mov TL0, #low(TIMER0_RELOAD)
+
+    mov T0_RH, #high(TIMER0_RELOAD)
+    mov T0_RL, #low(TIMER0_RELOAD)
+
+	mov TH0, T0_RH
+	mov TL0, T0_RL
 	; Enable the timer and interrupts
     setb ET0  ; Enable timer 0 interrupt
     setb TR0  ; Start timer 0
@@ -341,8 +347,8 @@ Timer0_Init:
 ;---------------------------------;
 Timer0_ISR:
 	;clr TF0  ; According to the data sheet this is done for us already.
-	mov TH0, #high(TIMER0_RELOAD) ; Timer 0 doesn't have autoreload in the CV-8052
-	mov TL0, #low(TIMER0_RELOAD)
+	mov TH0, T0_RH ; Timer 0 doesn't have autoreload in the CV-8052
+	mov TL0, T0_RL
 	cpl SOUND_OUT ; Connect speaker to P1.5
 	reti
 
@@ -1219,6 +1225,47 @@ WaitLoop:
 UnbeepSpeaker:
     clr TR0
     ret
+PlaySong:
+    setb TR0 ; Start timer
+    
+    ; Note 1: C - E - G - C arpeggio
+    
+    ; Note 1: C5 (523Hz) -> F5A2
+    mov T0_RH, #0xF5
+    mov T0_RL, #0xA2
+    mov R3, #4 ; Duration
+    lcall Song_Delay
+    
+    ; Note 2: E5 (659Hz) -> F7C5
+    mov T0_RH, #0xF7
+    mov T0_RL, #0xC5
+    mov R3, #4
+    lcall Song_Delay
+
+    ; Note 3: G5 (784Hz) -> F915
+    mov T0_RH, #0xF9
+    mov T0_RL, #0x15
+    mov R3, #4
+    lcall Song_Delay
+    
+    ; Note 4: C6 (1046Hz) -> FAD1
+    mov T0_RH, #0xFA
+    mov T0_RL, #0xD1
+    mov R3, #15 ; Longer duration
+    lcall Song_Delay
+
+    clr TR0 ; Stop timer
+    
+    ; Restore default beep pitch
+    mov T0_RH, #high(TIMER0_RELOAD)
+    mov T0_RL, #low(TIMER0_RELOAD)
+    ret
+
+Song_Delay:
+    lcall Wait50ms
+    djnz R3, Song_Delay
+    ret
+
 
 ;=============================================;
 
@@ -2304,6 +2351,9 @@ STOPOVENSpeakerLoop:
     lcall Wait50ms
     lcall Wait50ms
     djnz R4, STOPOVENSpeakerLoop
+ClearInterrupts:
+    clr EA
+    clr p0.0
 ForeverStop:
     jnb RESET_BUTTON, RestartProcess
     sjmp ForeverStop ; Infinite loop to stop the oven if abort condition is met
@@ -2314,6 +2364,7 @@ RestartProcess:
 ReflowDone:
     setb GREEN_LED
     mov R4, #5
+    mov R7, #5
 SpeakerLoop:
     lcall BeepSpeaker
     lcall Wait50ms
@@ -2322,6 +2373,18 @@ SpeakerLoop:
     lcall Wait50ms
     lcall Wait50ms
     djnz R4, SpeakerLoop
+DelaySpeakerSong:
+    lcall Wait50ms
+    lcall Wait50ms
+    lcall Wait50ms
+    lcall Wait50ms
+    lcall Wait50ms
+SongLoop:
+    lcall PlaySong
+    lcall PlaySong
+    lcall PlaySong
+    lcall PlaySong
+    lcall PlaySong
 Forever:
     jnb RESET_BUTTON, ForeverToMain
     sjmp Forever
