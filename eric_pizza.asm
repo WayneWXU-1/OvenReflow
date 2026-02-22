@@ -2294,7 +2294,6 @@ STOPOVEN:
     Send_Constant_String (#abortcondition_message)
     Set_Cursor(2,1)
     Send_Constant_String (#restart_message)
-    clr EA
     mov R4, #10
 STOPOVENSpeakerLoop:
     lcall BeepSpeaker
@@ -2304,6 +2303,9 @@ STOPOVENSpeakerLoop:
     lcall Wait50ms
     lcall Wait50ms
     djnz R4, STOPOVENSpeakerLoop
+ClearInterrupts:
+    clr EA
+    clr p0.0
 ForeverStop:
     jnb RESET_BUTTON, RestartProcess
     sjmp ForeverStop ; Infinite loop to stop the oven if abort condition is met
