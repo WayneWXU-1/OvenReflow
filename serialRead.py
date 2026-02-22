@@ -7,10 +7,9 @@ from collections import deque
 
 xsize = 100  # Number of data points visible on x-axis
 SMOOTH_WINDOW = 10  # Number of samples to average for smoothing
-
 # Configure the serial port
 ser = serial.Serial(
-    port='COM9',
+    port='COM7',
     baudrate=57600,
     parity=serial.PARITY_NONE,
     stopbits=serial.STOPBITS_TWO,

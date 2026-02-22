@@ -157,11 +157,11 @@ DMMout.set ("NO DATA")
 DMM_Name.set ("--------")
 
 #==========================CHANGE THE COM PORT==========================#
-port = 'COM6'
+port = 'COM8'
 #==========================CHANGE THE COM PORT==========================#
 
 try:
-   ser2 = serial.Serial(port, 57600, timeout=0)
+   ser2 = serial.Serial(port, 115200, timeout=0)
 except:
    print('Serial port %s is not available' % (port))
    portlist=list(serial.tools.list_ports.comports())
