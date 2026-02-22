@@ -8,10 +8,14 @@ else:
     import tkinter as Tkinter
     from tkinter import *
     from tkinter import messagebox as tkMessageBox
+    
 import time
+
 import serial
 import serial.tools.list_ports
 import kconvert
+
+
 
 top = Tk()
 top.resizable(0,0)
@@ -25,8 +29,9 @@ DMMout = StringVar()
 portstatus = StringVar()
 DMM_Name = StringVar()
 connected=0
-global ser
-   
+global ser 
+last_valid_val2=22.0
+
 def Just_Exit():
     top.destroy()
     try:
@@ -36,6 +41,8 @@ def Just_Exit():
 
 def update_temp():
     global ser, connected
+    global last_valid_val2
+
     if connected==0:
         top.after(5000, FindPort) # Not connected, try to reconnect again in 5 seconds
         return
@@ -75,16 +82,32 @@ def update_temp():
        strin2 = strin2.rstrip()
        strin2 = strin2.decode()
 
+       
        if len(strin2) > 0:
           try:
              val2=float(strin2)
           except:
              val2=0
 
-       if valid_val == 1 :
+       if valid_val == 1 and len(strin2) > 0 :
            ktemp=round(kconvert.mV_to_C(val, cj),1)
+
+           if abs(val2 - ktemp) <= 10 :
+                last_valid_val2 = val2
+           else:
+                val2 = last_valid_val2
+
            if ktemp < -200:  
                Temp.set("UNDER")
+               
+           elif ktemp < 25 and ktemp > 0:
+               val2 -= 2
+               Temp.set(ktemp)
+               try:
+                  print(ktemp, val2, round(abs(ktemp-val2),2))
+               except:
+                  dummy=2
+
            elif ktemp > 1372:
                Temp.set("OVER")
            else:
@@ -157,11 +180,11 @@ DMMout.set ("NO DATA")
 DMM_Name.set ("--------")
 
 #==========================CHANGE THE COM PORT==========================#
-port = 'COM8'
+port = 'COM7' # Change to COM port assigned to your board
 #==========================CHANGE THE COM PORT==========================#
 
 try:
-   ser2 = serial.Serial(port, 115200, timeout=0)
+   ser2 = serial.Serial(port, 57600, timeout=0)
 except:
    print('Serial port %s is not available' % (port))
    portlist=list(serial.tools.list_ports.comports())
