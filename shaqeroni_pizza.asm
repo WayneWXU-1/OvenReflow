@@ -22,7 +22,7 @@ START_BUTTON  equ P3_5 ; middle right
 STOP_BUTTON   equ P3_7 ; right 
 PARAM_BUTTON  equ P3_3 ; middle left
 
-OVEN_PIN      equ P0_0
+OVEN_PIN      equ p0.0
 SOUND_OUT     equ P1_5 ; Speaker attached to this pin
 UPDOWN        equ SWA_0
 TENS          equ SWA_1
@@ -112,11 +112,9 @@ y:		ds	4 ;used for 32 bit math for temperature conversion
 bcd:    ds  5 ; <--- ADD THIS: math32 needs 5 bytes for BCD conversions
 
 ;--ISR RELATED--;
-Count1ms:     ds 2 ; Used to determine when one second has passed
-Counter20ms:  ds 1 ; Counts 1ms ticks for 20ms flag
-Counter50ms:  ds 1 ; Counts 1ms ticks for 50ms flag
+Count1ms:     ds 2 ; Used to determine when half second has passed
 BCD_counter:  ds 1 ; The BCD counter incrememted in the ISR and displayed in the main loop
-current_state: ds 1 ; For non-blocking FSM: which state to run next loop iteration
+
 
 ; **** keypad variables ****
 keypad_digit_count: ds 1
@@ -124,9 +122,7 @@ keypad_digit_count: ds 1
 bseg
 START_FLAG:         DBIT 1  ; Use DBIT for single bits in bseg
 half_seconds_flag:  DBIT 1  ; half second flag
-SECONDS_FLAG:       DBIT 1  ; one second passed - run 1s tasks in main
-flag_20ms:          DBIT 1  ; set every 20ms - e.g. run Calculate_ADC in main
-flag_50ms:          DBIT 1  ; set every 50ms - e.g. run display updates in main
+seconds_flag:       DBIT 1  ; can change later depending on how fast we want it
 SELECT_BUTTON_FLAG: DBIT 1
 PARAM_BUTTON_FLAG:  DBIT 1
 KEYPAD_FLAG:        DBIT 1
@@ -152,22 +148,6 @@ COL1 EQU P2.2
 COL2 EQU P2.4
 COL3 EQU P2.6
 COL4 EQU P3.0
-
-; Non-blocking FSM state indices (dispatch from MAIN_LOOP)
-ST_PINIT     EQU 0
-ST_P         EQU 1
-ST_P1D       EQU 2
-ST_P2D       EQU 3
-ST_P3D       EQU 4
-ST_P4D       EQU 5
-ST_READY     EQU 6
-ST_READY_WAIT EQU 7
-ST_0         EQU 8
-ST_1         EQU 9
-ST_2         EQU 10
-ST_3         EQU 11
-ST_4         EQU 12
-ST_5         EQU 13
 
 ;                           1234567890123456
 blank_row:              db '                ', 0
@@ -280,6 +260,64 @@ putchar:
     mov SBUF, a ; accumulator will have output chharacter already stored on it
     ret
 
+SendString:
+    clr A
+    movc A, @A+DPTR
+    jz SendStringDone
+    lcall putchar
+    inc DPTR
+    sjmp SendString
+SendStringDone:
+    ret
+
+
+; Send number **** new*****
+SendNum:
+	mov a, @R0
+	add a, #'0'
+	lcall putchar
+	ret
+
+    Send_BCD mac
+	push ar0
+	mov r0, %0
+	lcall ?Send_BCD
+	pop ar0
+endmac
+
+?Send_BCD:
+	push acc
+	; Write most significant digits
+	mov a, r0
+	swap a
+	anl a, #0fh
+	orl a, #30h
+	lcall putchar
+	
+	; write least significant digits
+	mov a, r0
+	anl a, #0fh
+	orl a, #30h
+	lcall putchar
+	pop acc
+	ret
+    
+	
+SendTemp:
+	
+	Send_BCD(bcd+1)
+	
+	Send_BCD(bcd+0)
+	
+	mov DPTR, #TempSuf
+	lcall SendString
+	
+	ret
+	;Sends 
+ 
+TempSuf:
+	db	'\r', '\n', 0
+
 
 ; ******************************* TIMER ISRS ************************************
 
@@ -322,184 +360,153 @@ Timer2_Init:
 	clr a
 	mov Count1ms+0, a
 	mov Count1ms+1, a
-	mov Counter20ms, a
-	mov Counter50ms, a
 	; Enable the timer and interrupts
     setb ET2  ; Enable timer 2 interrupt
     setb TR2  ; Enable timer 2
 	ret
 
 ;---------------------------------;
-; ISR for timer 2 (1 ms tick)     ;
-; LIGHT ISR: only counters + flags ;
-; (no ADC, no LCD, no math) to    ;
-; avoid race conditions. Temp read ;
-; and all heavy work in main.     ;
+; ISR for timer 2                 ;
 ;---------------------------------;
 Timer2_ISR:
 	clr TF2  ; Timer 2 doesn't clear TF2 automatically. Do it in ISR
+	
 	push acc
 	push psw
+	push b
+	push dpl
+	push dph
+	push 0
+	push 1
+	push 2
+	push 3
+	push 4
+	push 5
+	push 6
+	push 7
+	
+	; Increment the 16-bit one mili second counter
+	inc Count1ms+0    ; Increment the low 8-bits first
+	mov a, Count1ms+0 ; If the low 8-bits overflow, then increment high 8-bits
+	jnz Inc_Done
+	inc Count1ms+1 ;increment high 8-bits if low 8-bits overflowed
 
-	; Increment 16-bit 1 ms counter
-	inc Count1ms+0
+Inc_Done:
+	; Check if full second has passed
 	mov a, Count1ms+0
-	jnz Timer2_ISR_inc_done
-	inc Count1ms+1
-Timer2_ISR_inc_done:
-
-	; 20 ms flag: increment counter, set flag every 20 ms
-	inc Counter20ms
-	mov a, Counter20ms
-	cjne a, #20, Timer2_ISR_check_50
-	clr a
-	mov Counter20ms, a
-	setb flag_20ms
-
-Timer2_ISR_check_50:
-	; 50 ms flag: increment counter, set flag every 50 ms
-	inc Counter50ms
-	mov a, Counter50ms
-	cjne a, #50, Timer2_ISR_check_1s
-	clr a
-	mov Counter50ms, a
-	setb flag_50ms
-
-Timer2_ISR_check_1s:
-	; 1 second: reset Count1ms and set seconds_flag (main runs OneSecond_Tasks)
-	mov a, Count1ms+0
-	cjne a, #low(1000), Timer2_ISR_done
+	cjne a, #low(1000), Timer2_ISR_Midpoint ; Warning: this instruction changes the carry flag!
 	mov a, Count1ms+1
-	cjne a, #high(1000), Timer2_ISR_done
+	cjne a, #high(1000), Timer2_ISR_Midpoint
+
+    sjmp Timer2_ISR_Bypass
+    
+    
+; below this move to subroutine **************************************
+
+;	mov ADC_C, #00000000b
+	
+
+;    mov x+3, #0
+;	mov x+2, #0
+;	mov x+1, ADC_H
+;	mov x+0, ADC_L
+    ; Convert ADC reading to temperature in Celsius
+    ; Voltage = (ADC_value * 5000) / 4096
+;    Load_y(5000)
+;	lcall mul32
+;	Load_y(4096)
+;	lcall div32
+    ; Result is in 'x'
+
+;    Load_y(1000) ; convert to microvolts
+ ;   lcall mul32
+ ;   Load_y(12300) ; 41 * 300
+ ;   lcall div32
+
+ ;   Load_y(22) ; add cold junction temperature
+ ;   lcall add32
+    ;do your displays and stuff
+    ;result is still in x
+;    mov TEMP+0, x+0
+;    mov TEMP+1, x+1
+;    mov TEMP+2, #0
+    
+    ;lcall Display_Voltage_Serial
+ ;   lcall hex2bcd
+;    lcall SendTemp
+;    lcall Display_BCD_7_seg
+;
+;    sjmp Timer2_ISR_Bypass
+
+
+; above here keep in isr *********************************************
+
+Timer2_ISR_Midpoint:
+ljmp Timer2_ISR_done
+Timer2_ISR_Bypass:
+
+;---------------------------------------------------------------------;
+	
+	;1 second have passed.  Set a flag so the main program knows
+	setb seconds_flag ; Let the main program know one second had passed
+	; Toggle LEDR0 so it blinks
+    inc TIME ; Increment the TIME Variable
+	cpl LEDRA.0
 	clr a
 	mov Count1ms+0, a
 	mov Count1ms+1, a
-	setb seconds_flag
+    
+    ;Call PWM funcions
+Checkforstate1:
+    MOV A, STATE_VAR_1
+    CJNE A, #1, NOT_STATE_1
+    LCALL RampBurstPWM
+    SJMP PWM_EXIT
+NOT_STATE_1:
+    CJNE A, #3, NOT_STATE_3
+    LCALL RampBurstPWM
+    SJMP PWM_EXIT
+NOT_STATE_3:
+    CJNE A, #2, NOT_STATE_2
+    LCALL pwm_for_flatstates
+    SJMP PWM_EXIT
+NOT_STATE_2:
+    CJNE A, #4, PWM_EXIT     ; If not 4, do nothing and exit
+    LCALL pwm_for_flatstates
+PWM_EXIT:
 
+
+    
+	; Increment the BCD counter
+	mov a, BCD_counter
+	jb UPDOWN, Timer2_ISR_decrement
+	add a, #0x01; Increment the BCD counter
+	mov a, BCD_counter
+	jb UPDOWN, Timer2_ISR_decrement
+	add a, #0x01
+	sjmp Timer2_ISR_da
+Timer2_ISR_decrement:
+	add a, #0x99 ; Adding the 10-complement of -1 is like subtracting 1.
+Timer2_ISR_da:
+	da a ; Decimal adjust instruction.  Check datasheet for more details!
+	mov BCD_counter, a
+
+	
 Timer2_ISR_done:
+	pop 7
+	pop 6
+	pop 5
+	pop 4
+	pop 3
+	pop 2
+	pop 1
+	pop 0
+	pop dph
+	pop dpl
+	pop b
 	pop psw
 	pop acc
 	reti
-
-;---------------------------------;
-; Run from main when flag_20ms set ;
-;---------------------------------;
-Calculate_ADC:
-	mov a, #00000010b ; voltage reference port 2
-	mov ADC_C, a
-	lcall Wait50ms
-	lcall Wait25ms
-	mov a, ADC_H
-	anl a, #0x0F
-	mov ADCREFH, a
-	mov ADCREFL, ADC_L
-	mov a, #0x01 ; port for lm335
-	mov ADC_C, a
-	lcall Wait50ms
-	lcall Wait25ms
-	mov a, ADC_H
-	anl a, #0x0F
-	mov LM335H, a
-	mov LM335L, ADC_L
-	mov x+3, #0
-	mov x+2, #0
-	mov x+1, LM335H
-	mov x+0, LM335L
-	Load_y(4096)
-	lcall mul32
-	mov y+3, #0
-	mov y+2, #0
-	mov y+1, ADCREFH
-	mov y+0, ADCREFL
-	lcall div32
-	Load_y(2730)
-	lcall sub32
-	Load_y(10)
-	lcall div32
-	mov TCH, x+1
-	mov TCL, x+0
-	mov a, #0x00
-	mov ADC_C, a
-	lcall Wait50ms
-	lcall Wait25ms
-	mov a, ADC_H
-	anl a, #0x0F
-	mov x+3, #0
-	mov x+2, #0
-	mov x+1, a
-	mov x+0, ADC_L
-	Load_y(333)
-	lcall mul32
-	mov y+3, #0
-	mov y+2, #0
-	mov y+1, ADCREFH
-	mov y+0, ADCREFL
-	lcall div32
-	mov TH_H, x+1
-	mov TH_L, x+0
-	mov y+3, #0
-	mov y+2, #0
-	mov y+1, TCH
-	mov y+0, TCL
-	lcall add32
-	mov TEMP+0, x+0
-	mov TEMP+1, x+1
-	ret
-
-;---------------------------------;
-; Run from main when seconds_flag set ;
-;---------------------------------;
-OneSecond_Tasks:
-	inc TIME
-	cpl LEDRA.0
-	; PWM based on state
-	mov a, STATE_VAR_1
-	cjne a, #1, OS_Not_State_1
-	lcall RampBurstPWM
-	sjmp OS_PWM_Exit
-OS_Not_State_1:
-	cjne a, #3, OS_Not_State_3
-	lcall RampBurstPWM
-	sjmp OS_PWM_Exit
-OS_Not_State_3:
-	cjne a, #2, OS_Not_State_2
-	lcall pwm_for_flatstates
-	sjmp OS_PWM_Exit
-OS_Not_State_2:
-	cjne a, #4, OS_PWM_Exit
-	lcall pwm_for_flatstates
-OS_PWM_Exit:
-	; BCD counter
-	mov a, BCD_counter
-	jb UPDOWN, OS_BCD_decrement
-	add a, #0x01
-	sjmp OS_BCD_da
-OS_BCD_decrement:
-	add a, #0x99
-OS_BCD_da:
-	da a
-	mov BCD_counter, a
-	ret
-
-; Call from state loops to service timer flags (20ms, 50ms, 1s)
-Service_Timer_Flags:
-	jb flag_20ms, STF_20
-	jb flag_50ms, STF_50
-	jb seconds_flag, STF_1s
-	ret
-STF_20:
-	clr flag_20ms
-	lcall Calculate_ADC
-	ljmp Service_Timer_Flags
-STF_50:
-	clr flag_50ms
-	lcall Display_Voltage_Serial
-	lcall Display_BCD_7_seg
-	ljmp Service_Timer_Flags
-STF_1s:
-	clr seconds_flag
-	lcall OneSecond_Tasks
-	ljmp Service_Timer_Flags
 
 INITIALIZE:
 
@@ -508,12 +515,166 @@ INITIALIZE:
     mov P2MOD, #00000001b ; output: 2.0(ROW) input: 2.2, 2.4, 2.6(COL)
     mov P3MOD, #00000010b ; input: 3.0 (COL), 3.2, 3.3, 3.4, 3.5, 3.7 out: 3.1
     ; for keypad, (ROWS as output-1)1.2, 1.4, 1.6, 2.0 - (COLS as input-0) 2.2, 2.4, 2.6, 3.0
-    lcall Configure_Keypad_Pins
     mov ADC_C, #0x00      ; Select ADC Channel 0
     mov ADC_C, #10000000b ; ADC Enable = 1 test******
     ret                   ; Added RET so it doesn't crash after initializing
 
 ; ************************** FUNCTIONS ***********************************
+
+ADC_Bible:
+    push acc
+	push psw
+	push b
+	push dpl
+	push dph
+	push 0
+	push 1
+	push 2
+	push 3
+	push 4
+	push 5
+	push 6
+	push 7
+
+
+    mov a, #00000010b ;get the voltage reference port 2
+	
+	mov ADC_C, a
+	lcall Wait50ms
+	lcall Wait25ms
+	
+	
+	mov a, ADC_H
+	anl a, #0x0F ;mask the lower 4 bits
+	mov ADCREFH, a
+	mov ADCREFL, ADC_L
+	
+	;values stored in ADCREFL now read lm335
+	mov a, #0x01 ;port for lm335
+	mov ADC_C, a
+	
+	lcall Wait50ms
+	lcall Wait25ms
+
+	
+	
+	mov a, ADC_H
+	anl a, #0x0F ;mask the bottom 4 bits
+	mov LM335H, a
+	mov LM335L, ADC_L
+	
+	;now all in variables start calculations
+	
+	;start calculations
+	
+	mov x+3, #0
+	mov x+2, #0
+	mov x+1, LM335H
+	mov x+0, LM335L
+	
+	Load_y(4116) ;initially assumed it was 4096 this is wrong 
+	lcall mul32
+	
+	;vref * ADClm335
+	
+	
+	;----------------------------
+	mov y+3, #0
+	mov y+2, #0
+	mov y+1, ADCREFH
+	mov y+0, ADCREFL
+	
+	lcall div32
+	;ok now x = Vlm335 this is adc value
+	
+	
+	
+	Load_y(2730)
+	lcall sub32
+	
+	Load_y(10)
+	lcall div32
+	
+	mov TCH, x+1
+	mov TCL, x+0
+	;TC is done here
+	
+	;read from thermocouple/op amp
+	;Th calculations
+	mov a, #0x00
+	mov ADC_C, a
+	
+	lcall Wait50ms
+	lcall Wait25ms
+	
+	;mask the top bits
+	mov a, ADC_H
+	anl a, #0x0F
+	
+	mov x+3, #0
+	mov x+2, #0
+	mov x+1, a
+	mov x+0, ADC_L
+	;op amp exists in x
+
+	Load_y(333)
+	lcall mul32
+	
+	
+	mov y+3, #0
+	mov y+2, #0
+	mov y+1, ADCREFH
+	mov y+0, ADCREFL
+	
+	lcall div32
+	
+	mov TH_H, x+1
+	mov TH_L, x+0
+	;Th done here
+	;wonderful now we add Th+Tc
+	
+	
+	mov y+3, #0
+	mov y+2, #0
+	mov y+1, TCH
+	mov y+0, TCL
+	
+	lcall add32
+	
+	mov TEMP+0, x+0
+	mov TEMP+1, x+1
+	
+	mov x+3, #0
+	mov x+2, #0
+	
+	
+    lcall hex2bcd
+    lcall SendTemp
+    lcall Display_BCD_7_seg
+	lcall Wait50ms
+
+    pop 7
+	pop 6
+	pop 5
+	pop 4
+	pop 3
+	pop 2
+	pop 1
+	pop 0
+	pop dph
+	pop dpl
+	pop b
+	pop psw
+	pop acc
+
+    clr seconds_flag
+    ret
+
+;--------------------------------------end of bible-----------
+
+
+
+; above this is ADC *********************************************************
 
 Wait50ms:
 ;33.33MHz, 1 clk per cycle: 0.03us
@@ -1083,8 +1244,6 @@ MAIN:
     lcall InitSerialPort
     
     clr seconds_flag
-    clr flag_20ms
-    clr flag_50ms
     clr START_FLAG
     clr KEYPAD_FLAG
     clr p0.0 ; Make sure oven is off to start
@@ -1102,10 +1261,7 @@ MAIN:
     mov DEGREES60, #60
     mov DEGREES150, #150
     mov DEGREES220, #220
-    mov TARGET+0, #0
-    mov TARGET+1, #0
-    mov TARGET_TIME+0, #0
-    mov TARGET_TIME+1, #0
+    mov TARGET,       #0
 
     mov bcd, #0x0000
     mov x+0, #0x0000
@@ -1113,84 +1269,20 @@ MAIN:
     mov x+2, #0x0000
     mov x+3, #0x0000
 
-    mov soak_temp_set+0, #0
+    mov soak_temp_set+0, #150
     mov soak_temp_set+1, a
 
-    mov soak_time_set+0, #0
+    mov soak_time_set+0, #60
     mov soak_time_set+1, a
 
-    mov reflow_temp_set+0, #0
+    mov reflow_temp_set+0, #220
     mov reflow_temp_set+1, a
 
-    mov reflow_time_set+0, #0
+    mov reflow_time_set+0, #45
     mov reflow_time_set+1, a
 
-    mov current_state, #ST_PINIT
 
-; Forever loop: service timer flags (ADC/display/1s), then run one FSM state (non-blocking)
 MAIN_LOOP:
-	jb flag_20ms, Do_20ms_Tasks
-	jb flag_50ms, Do_50ms_Tasks
-	jb seconds_flag, Do_1s_Tasks
-	mov a, current_state
-	cjne a, #ST_PINIT, ML_not_pinit
-	ljmp StatePInit
-ML_not_pinit:
-	cjne a, #ST_P, ML_not_p
-	ljmp StateP
-ML_not_p:
-	cjne a, #ST_P1D, ML_not_p1d
-	ljmp Preset1_Display
-ML_not_p1d:
-	cjne a, #ST_P2D, ML_not_p2d
-	ljmp Preset2_Display
-ML_not_p2d:
-	cjne a, #ST_P3D, ML_not_p3d
-	ljmp Preset3_Display
-ML_not_p3d:
-	cjne a, #ST_P4D, ML_not_p4d
-	ljmp Preset4_Display
-ML_not_p4d:
-	cjne a, #ST_READY, ML_not_ready
-	ljmp ReadyStateInit
-ML_not_ready:
-	cjne a, #ST_READY_WAIT, ML_not_ready_wait
-	ljmp ReadyStateWait
-ML_not_ready_wait:
-	cjne a, #ST_0, ML_not_0
-	ljmp State0
-ML_not_0:
-	cjne a, #ST_1, ML_not_1
-	ljmp State1
-ML_not_1:
-	cjne a, #ST_2, ML_not_2
-	ljmp State2
-ML_not_2:
-	cjne a, #ST_3, ML_not_3
-	ljmp State3
-ML_not_3:
-	cjne a, #ST_4, ML_not_4
-	ljmp State4
-ML_not_4:
-	cjne a, #ST_5, ML_default
-	ljmp State5
-ML_default:
-	mov current_state, #ST_PINIT
-	ljmp MAIN_LOOP
-
-Do_20ms_Tasks:
-	clr flag_20ms
-	lcall Calculate_ADC
-	sjmp MAIN_LOOP
-Do_50ms_Tasks:
-	clr flag_50ms
-	lcall Display_Voltage_Serial
-	lcall Display_BCD_7_seg
-	sjmp MAIN_LOOP
-Do_1s_Tasks:
-	clr seconds_flag
-	lcall OneSecond_Tasks
-	sjmp MAIN_LOOP
 
 ; **************************** Preset Settings **************************************
 
@@ -1201,135 +1293,152 @@ StatePInit:
     Send_Constant_String (#preset_message)
 	Set_Cursor(2,1)
 	Send_Constant_String (#stop_to_skip_message)
+
     clr SELECT_BUTTON_FLAG
-    mov current_state, #ST_P
-    ljmp MAIN_LOOP
 
 StateP:
-    lcall Service_Timer_Flags
     lcall Check_Select_Button_Press
-    jnb PRESET1_SW, StateP_chk2
-    ljmp Presetx1
-StateP_chk2:
-    jnb PRESET2_SW, StateP_chk3
-    ljmp Presetx2
-StateP_chk3:
-    jnb PRESET3_SW, StateP_chk4
-    ljmp Presetx3
-StateP_chk4:
-    jnb PRESET4_SW, StateP_chk_sel
-    ljmp Presetx4
-StateP_chk_sel:
+
+    jb PRESET1_SW, Presetx1
+    jb PRESET2_SW, Presetx2
+    jb PRESET3_SW, Presetx3
+    jb PRESET4_SW, P0P4
     jb SELECT_BUTTON_FLAG, GoToParam
-    mov current_state, #ST_P
-    ljmp MAIN_LOOP
+
+    jb seconds_flag, P0ADC
+
+sjmp StateP
+
+P0ADC:
+lcall ADC_Bible
+sjmp StateP
 
 GoToParam:
+lcall BeepSpeaker
 ljmp PARAM_FSM
+
+P0P4:
+ljmp Presetx4
 
 Presetx1:
 	mov soak_temp_set, #170
 	mov soak_time_set, #75
 	mov reflow_temp_set, #230
 	mov reflow_time_set, #45
+
 	lcall BeepSpeaker
-	mov current_state, #ST_P1D
-	ljmp MAIN_LOOP
+    lcall Preset_Displays
 
 Preset1_Display:
-    lcall Preset_Displays
     lcall Check_Select_Button_Press
 	jb SELECT_BUTTON_FLAG, P1GT0
 	jnb PRESET1_SW, P1GTI
-	mov current_state, #ST_P1D
-	ljmp MAIN_LOOP
+
+    jb seconds_flag, P1ADC
+
+	sjmp Preset1_Display
 
 P1GTI:
-	lcall BeepSpeaker
-	mov current_state, #ST_PINIT
-	ljmp MAIN_LOOP
+lcall BeepSpeaker
+ljmp StatePInit
 
 P1GT0:
-	mov current_state, #ST_READY
-	ljmp MAIN_LOOP
+lcall BeepSpeaker
+ljmp ReadyStateInit
+
+P1ADC:
+lcall ADC_Bible
+sjmp Preset1_Display
 
 Presetx2:
 	mov soak_temp_set, #160
 	mov soak_time_set, #90
 	mov reflow_temp_set, #230
 	mov reflow_time_set, #60
+
 	lcall BeepSpeaker
-	mov current_state, #ST_P2D
-	ljmp MAIN_LOOP
+    lcall Preset_Displays
+
 
 Preset2_Display:
-    lcall Preset_Displays
     lcall Check_Select_Button_Press
 	jb SELECT_BUTTON_FLAG, P2GT0
 	jnb PRESET2_SW, P2GTI
-	mov current_state, #ST_P2D
-	ljmp MAIN_LOOP
+
+    jb seconds_flag, P2ADC
+
+	sjmp Preset2_Display
 
 P2GTI:
-	lcall BeepSpeaker
-	mov current_state, #ST_PINIT
-	ljmp MAIN_LOOP
+lcall BeepSpeaker
+ljmp StatePInit
 
 P2GT0:
-	mov current_state, #ST_READY
-	ljmp MAIN_LOOP
+lcall BeepSpeaker
+ljmp ReadyStateInit
+
+P2ADC:
+lcall ADC_Bible
+sjmp Preset2_Display
 
 Presetx3:
 	mov soak_temp_set, #150
 	mov soak_time_set, #120
 	mov reflow_temp_set, #225
 	mov reflow_time_set, #60
-	lcall BeepSpeaker
-	mov current_state, #ST_P3D
-	ljmp MAIN_LOOP
 
-Preset3_Display:
+	lcall BeepSpeaker
     lcall Preset_Displays
+Preset3_Display:
     lcall Check_Select_Button_Press
 	jb SELECT_BUTTON_FLAG, P3GT0
 	jnb PRESET3_SW, P3GTI
-	mov current_state, #ST_P3D
-	ljmp MAIN_LOOP
+
+    jb seconds_flag, P3ADC
+
+	sjmp Preset3_Display
 
 P3GTI:
-	lcall BeepSpeaker
-	mov current_state, #ST_PINIT
-	ljmp MAIN_LOOP
+lcall BeepSpeaker
+ljmp StatePInit
 
 P3GT0:
-	mov current_state, #ST_READY
-	ljmp MAIN_LOOP
+lcall BeepSpeaker
+ljmp ReadyStateInit
+
+P3ADC:
+lcall ADC_Bible
+ljmp Preset3_Display
 
 Presetx4:
 	mov soak_temp_set, #180
 	mov soak_time_set, #60
 	mov reflow_temp_set, #235
 	mov reflow_time_set, #30
+
 	lcall BeepSpeaker
-	mov current_state, #ST_P4D
-	ljmp MAIN_LOOP
+    lcall Preset_Displays
 
 Preset4_Display:
-    lcall Preset_Displays
     lcall Check_Select_Button_Press
 	jb SELECT_BUTTON_FLAG, P4GT0
 	jnb PRESET4_SW, P4GTI
-	mov current_state, #ST_P4D
-	ljmp MAIN_LOOP
+
+    jb seconds_flag, P4ADC
+
+	sjmp Preset4_Display
 
 P4GTI:
-	lcall BeepSpeaker
-	mov current_state, #ST_PINIT
-	ljmp MAIN_LOOP
+lcall BeepSpeaker
+ljmp StatePInit
 
 P4GT0:
-	mov current_state, #ST_READY
-	ljmp MAIN_LOOP
+lcall BeepSpeaker
+ljmp ReadyStateInit
+
+P4ADC:
+lcall ADC_Bible
+ljmp Preset4_Display
 
 
 Preset_Displays:
@@ -1345,11 +1454,12 @@ Preset_Displays:
 	mov x+0, soak_temp_set+0
 	mov x+1, soak_temp_set+1
 	lcall hex2bcd
-	Set_Cursor(1,5)
+    ;Set_Cursor(1,5)
+	;Send_Constant_String(#':')
+	Set_Cursor(1,6)
 	Display_BCD(bcd+1)
 	Display_BCD(bcd+0)
-	Set_Cursor(1,5)
-	Send_Constant_String(#':')
+	
 
 	mov x+0, soak_time_set+0
 	lcall hex2bcd
@@ -1359,11 +1469,12 @@ Preset_Displays:
 	mov x+0, reflow_temp_set+0
 	mov x+1, reflow_temp_set+1
 	lcall hex2bcd
-	Set_Cursor(2,5)
+    ;Set_Cursor(2,5)
+	;Send_Constant_String(#':')
+	Set_Cursor(2,6)
 	Display_BCD(bcd+1)
 	Display_BCD(bcd+0)
-	Set_Cursor(2,5)
-	Send_Constant_String(#':')
+	
 
 	mov x+0, reflow_time_set+0
 	lcall hex2bcd
@@ -1378,10 +1489,6 @@ Preset_Displays:
 
 PARAM_FSM:
 
-; **************************** FSM1: PARAMETER ENTRY *************************
-; User sets soak temp/time, reflow temp/time (before thermocouple in oven).
-; States: A = soak temp, B = soak time, C = reflow temp, D = reflow time.
-; Service_Timer_Flags at start of each state -> temp read (Calculate_ADC) every 20ms.
 ; **************************** FSM for selecting parameters *************************
 
 ; 4 main states ->  A: select soak temp
@@ -1401,13 +1508,14 @@ StateAInit:
     mov keypad_digit_count, #0
 
 StateA:
-    lcall Service_Timer_Flags
     jnb RESET_BUTTON, StateA_ResetToMain
     mov R6, STATE_VAR_2
     cjne R6, #0, StateA_B
 
     lcall Check_Select_Button_Press
     jb SELECT_BUTTON_FLAG, StateAtoDone
+
+    jb seconds_flag, AtoADC
 
     mov x+0, soak_temp_set+0
     mov x+1, soak_temp_set+1
@@ -1424,8 +1532,7 @@ StateA:
     sjmp StateA_Keypad
 
 StateA_ResetToMain:
-	mov current_state, #ST_PINIT
-	ljmp MAIN_LOOP   
+ljmp MAIN   
 
 StateA_B:
 ljmp StateBInit
@@ -1433,15 +1540,14 @@ ljmp StateBInit
 StateAtoDone:
 ljmp StateADone
 
+AtoADC:
+lcall ADC_Bible
+ljmp StateA
+
 StateA_Keypad:
     lcall Keypad
     jnc StateA
-    ; Only accept decimal digits 0-9 (reject A-F)
-    mov a, R7
-    cjne a, #10, StateA_Keypad_not10
-    ljmp StateA
-StateA_Keypad_not10:
-    jnc StateA
+
     jb KEYPAD_FLAG, StateA_Keypad_Continue
     setb KEYPAD_FLAG
 
@@ -1522,13 +1628,14 @@ StateBInit:
     mov keypad_digit_count, #0
 
 StateB:
-    lcall Service_Timer_Flags
     jnb RESET_BUTTON, StateB_ResetToMain
     mov R6, STATE_VAR_2
     cjne R6, #1, StateB_C
 
     lcall Check_Select_Button_Press
     jb SELECT_BUTTON_FLAG, StateBtoDone
+
+    jb seconds_flag, BtoADC
 
     mov x+0, soak_time_set+0
     mov x+1, #0
@@ -1544,8 +1651,7 @@ StateB:
     ljmp StateB_Keypad
 
 StateB_ResetToMain:
-	mov current_state, #ST_PINIT
-	ljmp MAIN_LOOP
+ljmp MAIN
 
 StateB_C:
 ljmp StateCInit
@@ -1553,14 +1659,14 @@ ljmp StateCInit
 StateBtoDone:
 ljmp StateBDone
 
+BtoADC:
+lcall ADC_Bible
+ljmp StateB
+
 StateB_Keypad:
     lcall Keypad
     jnc StateB
-    mov a, R7
-    cjne a, #10, StateB_Keypad_not10
-    ljmp StateB
-StateB_Keypad_not10:
-    jnc StateB
+
     jb KEYPAD_FLAG, StateB_Keypad_Continue
     setb KEYPAD_FLAG
 
@@ -1577,7 +1683,6 @@ StateB_Keypad_Continue:
     lcall bcd2hex
 
     mov soak_time_set+0, x+0
-    mov soak_time_set+1, #0
 
     mov x+0, soak_time_set+0
     mov x+1, #0
@@ -1641,13 +1746,14 @@ StateCInit:
     mov keypad_digit_count, #0
 
 StateC:
-    lcall Service_Timer_Flags
     jnb RESET_BUTTON, StateC_ResetToMain
     mov R6, STATE_VAR_2
     cjne R6, #2, StateC_D
 
     lcall Check_Select_Button_Press
     jb SELECT_BUTTON_FLAG, StateCtoDone
+
+    jb seconds_flag, CtoADC
 
     mov x+0, reflow_temp_set+0
     mov x+1, reflow_temp_set+1
@@ -1665,8 +1771,7 @@ StateC:
     ljmp StateC_Keypad
 
 StateC_ResetToMain:
-	mov current_state, #ST_PINIT
-	ljmp MAIN_LOOP
+ljmp MAIN
 
 StateC_D:
 ljmp StateDInit
@@ -1674,14 +1779,14 @@ ljmp StateDInit
 StateCtoDone:
 ljmp StateCDone
 
+CtoADC:
+lcall ADC_Bible
+ljmp StateC
+
 StateC_Keypad:
     lcall Keypad
     jnc StateC
-    mov a, R7
-    cjne a, #10, StateC_Keypad_not10
-    ljmp StateC
-StateC_Keypad_not10:
-    jnc StateC
+
     jb KEYPAD_FLAG, StateC_Keypad_Continue
     setb KEYPAD_FLAG
 
@@ -1762,13 +1867,14 @@ StateDInit:
     mov keypad_digit_count, #0
 
 StateD:
-    lcall Service_Timer_Flags
     jnb RESET_BUTTON, StateD_ResetToMain
     mov R6, STATE_VAR_2
     cjne R6, #3, StateD_R
 
     lcall Check_Select_Button_Press
     jb SELECT_BUTTON_FLAG, StateDtoDone
+
+    jb seconds_flag, DtoADC
 
     mov x+0, reflow_time_set+0
     mov x+1, #0
@@ -1784,8 +1890,7 @@ StateD:
     sjmp StateD_Keypad
 
 StateD_ResetToMain:
-	mov current_state, #ST_PINIT
-	ljmp MAIN_LOOP
+ljmp MAIN
 
 StateD_R:
 ljmp ReadyStateInit
@@ -1793,14 +1898,14 @@ ljmp ReadyStateInit
 StateDtoDone:
 ljmp StateDDone
 
+DtoADC:
+lcall ADC_Bible
+ljmp StateD
+
 StateD_Keypad:
-    lcall Keypad
+    lcall Keypad 
     jnc StateD
-    mov a, R7
-    cjne a, #10, StateD_Keypad_not10
-    ljmp StateD
-StateD_Keypad_not10:
-    jnc StateD
+
     jb KEYPAD_FLAG, StateD_Keypad_Continue
     setb KEYPAD_FLAG
 
@@ -1817,7 +1922,7 @@ StateD_Keypad_Continue:
     lcall bcd2hex
 
     mov reflow_time_set+0, x+0
-    mov reflow_time_set+1, #0
+    ;mov reflow_time_set+1, x+1
 
     mov x+0, reflow_time_set+0
     mov x+1, #0
@@ -1876,30 +1981,30 @@ ReadyStateInit:
     Send_Constant_String(#ready_message)
     Set_Cursor(2,1)
     Send_Constant_String(#blank_row)
+
     clr SELECT_BUTTON_FLAG
     clr PARAM_BUTTON_FLAG
     clr KEYPAD_FLAG
     mov keypad_digit_count, #0
-    mov current_state, #ST_READY_WAIT
-    ljmp MAIN_LOOP
 
-; Non-blocking wait for START button (called every MAIN_LOOP iteration)
-ReadyStateWait:
-    jb START_BUTTON, ReadyStateWait_stay
-    lcall Wait50ms
-    jb START_BUTTON, ReadyStateWait_stay
+ReadyState:
+    jb seconds_flag, RtoADC
+
+    jb START_BUTTON, ReadyState
+    lcall wait50ms
+    jb START_BUTTON, ReadyState
+
     Set_Cursor(1,1)
-    Send_Constant_String(#state0_message)
-    setb START_FLAG
-    mov current_state, #ST_0
-    ljmp MAIN_LOOP
-ReadyStateWait_stay:
-    mov current_state, #ST_READY_WAIT
-    ljmp MAIN_LOOP
+    Send_Constant_String (#state0_message)
 
-;================== FSM2: REFLOW PROFILE (thermocouple in oven) ==================;
-; State0=idle, State1=Ramp To Soak, State2=Soak, State3=Ramp To Peak,
-; State4=Reflow, State5=Cooling. Temp read every 20ms via Service_Timer_Flags.
+    setb START_FLAG
+    
+    sjmp State0
+
+RtoADC:
+lcall ADC_Bible
+sjmp ReadyState
+
 ;==================Reflow Profile FSM==================;
 ;Checklist:
 ; 1. Implement TEMP and TIME variables - DONE
@@ -1911,33 +2016,30 @@ ReadyStateWait_stay:
 ;*Abort condition needs to be in state 1* - FIXED
 ; 7. Rewrite State Transitions with SUBB - DONE
 State0:
-    lcall Service_Timer_Flags
     jnb STOP_BUTTON, State0_StopReflow
     CLR p0.0 ;oven off
     mov a, STATE_VAR_1
     mov TIME, #0
     cjne a, #0, State1
     jb START_FLAG, State0Done
-    mov current_state, #ST_0
-    ljmp MAIN_LOOP
+    sjmp State0
 
 State0_StopReflow:
-	ljmp StopReflow
+ljmp StopReflow
 
 State0Done:
     lcall BeepSpeaker
     MOV PHASE, #00h
-    MOV ON_SECS, #3
-    MOV LEAD, #20
+    MOV ON_SECS, #4
+    MOV LEAD, #10
     inc STATE_VAR_1
     mov POWER, #100
     mov TIME, #0
-    mov current_state, #ST_0
-    ljmp MAIN_LOOP
+    sjmp State0
 State1:
-    lcall Service_Timer_Flags
     jnb RESET_BUTTON, State1_ResetToMain
     jnb STOP_BUTTON, State1_StopReflow
+    jb seconds_flag, State1_ADC
     mov a, STATE_VAR_1
     cjne a, #1, State2
     Set_Cursor(1,1)
@@ -1945,13 +2047,16 @@ State1:
     lcall FSM2_Temp_Time_display
     lcall CheckAbortCondition ;Must abort if 50 degrees isn't reached in first 60 seconds
 
-    mov TARGET+0, SOAK_TEMP_set+0
-    mov TARGET+1, SOAK_TEMP_set+1
-    mov a, TEMP+0
+    mov TARGET, SOAK_TEMP_set
+    mov a, TEMP
     clr c
-    subb a, TARGET+0
+    subb a, TARGET
     jc CheckCarryState1 ; C = 1, Keep heating
     ljmp GreaterThanState1 ; C = 0, Transition States
+
+State1_ADC:
+    lcall ADC_Bible
+    sjmp State1
 
 State1_ResetToMain:
 ljmp ResetToMain
@@ -1963,31 +2068,32 @@ CheckCarryState1:
     jc LessThanState1
     sjmp GreaterThanState1
 LessThanState1:
-    mov current_state, #ST_1
-    ljmp MAIN_LOOP
+    sjmp State1
 GreaterThanState1:
     lcall BeepSpeaker
     inc STATE_VAR_1
     mov POWER, #20
     mov TIME, #0
-    mov current_state, #ST_1
-    ljmp MAIN_LOOP
+    sjmp State1
 State2:
-    lcall Service_Timer_Flags
     jnb RESET_BUTTON, State2_ResetToMain
     jnb STOP_BUTTON, State2_StopReflow
+    jb seconds_flag, State2_ADC
     mov a, STATE_VAR_1
     cjne a, #2, State2_State3
     Set_Cursor(1,1)
     Send_Constant_String (#state2_message)
     lcall FSM2_Temp_Time_display
-    mov TARGET_TIME+0, SOAK_TIME_set+0
-    mov TARGET_TIME+1, SOAK_TIME_set+1
-    mov a, TIME+0
+    mov TARGET_TIME, SOAK_TIME_set
+    mov a, TIME
     clr c
-    subb a, TARGET_TIME+0
+    subb a, TARGET_TIME
     jc CheckCarryState2 ; C = 1, TIME < TARGET_TIME
     ljmp GreaterThanState2 ; C = 0, TIME > TARGET_TIME -> transition states
+
+State2_ADC:
+    lcall ADC_Bible
+    sjmp State2
 
 State2_State3:
     ljmp State3
@@ -2020,33 +2126,34 @@ CheckCarryState2:
     jc LessThanState2
     sjmp GreaterThanState2
 LessThanState2:
-    mov current_state, #ST_2
-    ljmp MAIN_LOOP
+    sjmp State2
 GreaterThanState2:
     lcall BeepSpeaker
     MOV PHASE, #00h
-    MOV ON_SECS, #3
+    MOV ON_SECS, #4
     MOV LEAD, #10
     inc STATE_VAR_1
     mov POWER, #100
-    mov current_state, #ST_2
-    ljmp MAIN_LOOP
+    ljmp State2
 State3:
-    lcall Service_Timer_Flags
     jnb RESET_BUTTON, State3_ResetToMain
     jnb STOP_BUTTON, State3_StopReflow
+    jb seconds_flag, State3_ADC
     mov a, STATE_VAR_1
     cjne a, #3, State4
     Set_Cursor(1,1)
     Send_Constant_String (#state3_message)
     lcall FSM2_Temp_Time_display
-    mov TARGET+0, reflow_temp_set+0
-    mov TARGET+1, reflow_temp_set+1
-    mov a, TEMP+0
+    mov TARGET, reflow_temp_set
+    mov a, TEMP
     clr c
-    subb a, TARGET+0
+    subb a, TARGET
     jc CheckCarryState3 ; C = 1, TEMP < TARGET -> Keep Heating
-    ljmp GreaterThanState3 ; C = 0, TEMP > TARGET -> Transition States    
+    ljmp GreaterThanState3 ; C = 0, TEMP > TARGET -> Transition States
+
+State3_ADC:
+    lcall ADC_Bible
+    sjmp State3    
 
 State3_ResetToMain:
 ljmp ResetToMain
@@ -2058,30 +2165,31 @@ CheckCarryState3:
     jc LessThanState3
     sjmp GreaterThanState3
 LessThanState3:
-    mov current_state, #ST_3
-    ljmp MAIN_LOOP
+    sjmp State3
 GreaterThanState3:
     lcall BeepSpeaker
     inc STATE_VAR_1
     mov POWER, #20
     mov TIME, #0
-    mov current_state, #ST_3
-    ljmp MAIN_LOOP
+    sjmp State3
 State4:
     jnb RESET_BUTTON, ResetToMainState4
     jnb STOP_BUTTON, StopReflowState4
+    jb seconds_flag, State4_ADC
     mov a, STATE_VAR_1
     cjne a, #4, State5
     Set_Cursor(1,1)
     Send_Constant_String (#state4_message)
     lcall FSM2_Temp_Time_display
-    mov TARGET_TIME+0, REFLOW_TIME_set+0
-    mov TARGET_TIME+1, REFLOW_TIME_set+1
-    mov a, TIME+0
+    mov TARGET_TIME, REFLOW_TIME_set
+    mov a, TIME
     clr c
-    subb a, TARGET_TIME+0
+    subb a, TARGET_TIME
     jc CheckCarryState4 ; C = 1, TIME < TARGET_TIME -> Keep Going
     ljmp GreaterThanState4 ; C = 0, TIME > TARGET_TIME -> Transition States
+State4_ADC:
+    lcall ADC_Bible
+    sjmp State4
 StopReflowState4:
     ljmp StopReflow
 ResetToMainState4:
@@ -2090,30 +2198,31 @@ CheckCarryState4:
     jc LessThanState4
     sjmp GreaterThanState4
 LessThanState4:
-    mov current_state, #ST_4
-    ljmp MAIN_LOOP
+    sjmp State4 
 GreaterThanState4:
     lcall BeepSpeaker
     inc STATE_VAR_1
     mov POWER, #0
-    mov current_state, #ST_4
-    ljmp MAIN_LOOP
+    sjmp State4
+
 State5:
-    lcall Service_Timer_Flags
     jnb RESET_BUTTON, ResetToMainState5
     jnb STOP_BUTTON, StopReflowState5
-    CLR p0.0 ;turn oven off
+    jb seconds_flag, State5_ADC
+    CLR OVEN_PIN ;turn oven off
     mov a, STATE_VAR_1    
     cjne a, #5, State5toDone
-    mov TARGET+0, DEGREES60+0
-    mov TARGET+1, DEGREES60+1
-    mov a, TEMP+0
+    mov TARGET, DEGREES60
+    mov a, TEMP
     Set_Cursor(1,1)
     Send_Constant_String (#state5_message)
     lcall FSM2_Temp_Time_display
     cjne a, #60, CheckCarryState5
-    mov current_state, #ST_5
-    ljmp MAIN_LOOP
+    sjmp State5
+
+State5_ADC:
+    lcall ADC_Bible
+    sjmp State5
 
 ResetToMainState5:
     ljmp ResetToMain
@@ -2135,17 +2244,14 @@ CheckCarryState5:
 LessThanState5:
     mov STATE_VAR_1, #0
     clr START_FLAG
-    mov current_state, #ST_5
-    ljmp MAIN_LOOP
+    ljmp State5
 GreaterThanState5:
-    mov current_state, #ST_5
-    ljmp MAIN_LOOP
+    ljmp State5
 
 ResetToMain:
     mov STATE_VAR_1, #0
     mov POWER, #0
-    mov current_state, #ST_PINIT
-    ljmp MAIN_LOOP
+    ljmp MAIN
 
 StopReflow:
     setb RED_LED
@@ -2155,6 +2261,7 @@ StopReflow:
     Send_Constant_String (#restart_message)
     lcall BeepSpeaker
     clr OVEN_PIN ; Turn power off
+    clr EA
 ForeverStopped:
     jnb RESET_BUTTON, RestartProcess
     sjmp ForeverStopped
